@@ -1,13 +1,11 @@
-// Typed client for the (future) Ruby backend that wraps the bridge + mxcli.
-// Until that server exists, every call falls back to a local fixture/mock so the
-// UI is fully demoable offline. Wiring the real backend is just a matter of the
-// endpoints below returning the same shapes — no UI changes needed.
+// Typed client for the Ruby backend that wraps the bridge + mxcli. Marketplace
+// reads retain an offline fixture; mutations never pretend to have succeeded.
 //
-// Backend contract (to implement in the Ruby server):
+// Backend contract:
 //   GET  /api/marketplace/search?q=&limit=   -> MarketplaceItem[]   (mxcli marketplace search --json)
 //   GET  /api/marketplace/item/:id           -> MarketplaceItem     (mxcli marketplace info)
-//   POST /api/marketplace/install {id,version}-> { ok, message }    (mxcli marketplace install)
-//   POST /api/layout {qn, positions}         -> { ok, mdlPreview }  (persist @position via MDL apply)
+//   POST /api/marketplace/install {id,version}-> 403 (guarded CLI workflow only)
+//   POST /api/layout {qn, positions}         -> { ok, mdlPreview } (viewer sidecar)
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
 
@@ -28,6 +26,13 @@ export interface NodePosition {
   label: string;
   x: number;
   y: number;
+}
+
+export interface LayoutResult {
+  ok: boolean;
+  persisted?: boolean;
+  message: string;
+  mdlPreview: string;
 }
 
 export interface Mocked<T> {
@@ -66,14 +71,15 @@ export function searchMarketplace(q: string, limit = 20): Promise<Mocked<Marketp
 
 export function installMarketplaceItem(id: string, version?: string): Promise<Mocked<{ ok: boolean; message: string }>> {
   return postJSON(`/marketplace/install`, { id, version }, () => ({
-    ok: true,
-    message: `(mock) would run: mxcli marketplace install ${id}${version ? " --version " + version : ""}`,
+    ok: false,
+    message: `Backend unavailable or installation disabled for ${id}${version ? "@" + version : ""}.`,
   }));
 }
 
-export function saveLayout(qn: string, positions: NodePosition[]): Promise<Mocked<{ ok: boolean; mdlPreview: string }>> {
+export function saveLayout(qn: string, positions: NodePosition[]): Promise<Mocked<LayoutResult>> {
   return postJSON(`/layout`, { qn, positions }, () => ({
-    ok: true,
+    ok: false,
+    message: "Backend unavailable; layout was not saved.",
     mdlPreview: positions.map((p) => `@position(${Math.round(p.x)}, ${Math.round(p.y)})  ${p.label}`).join("\n"),
   }));
 }

@@ -368,6 +368,18 @@ Every import also writes `inventory/dependencies.json`. It combines normalized
 semantic references with qualified MDL references and retains only targets that
 exist in the inventory.
 
+Explore an imported inventory in the integrated web viewer:
+
+```sh
+bin/mendix-ruby serve ../ruby-bridge-sandbox-inventory
+```
+
+Open `http://127.0.0.1:4567`. The Ruby server exposes the inventory, dependency
+graph, backend health, read-only Marketplace queries, and persisted canvas
+positions. Layout positions live in `inventory/ui-layouts.json`; they do not
+modify the source `.mpr`. Marketplace installation is intentionally disabled
+in the viewer and remains available through the guarded CLI/Git workflow.
+
 Query dependencies, dependents, callers, callees, and downstream impact:
 
 ```sh
