@@ -1,0 +1,170 @@
+// Parse a microflow/nanoflow MDL body into a graph of blocks, then map it to
+// React Flow nodes/edges. Best-effort structured parse of `@position`/`@caption`
+// plus the `if / else / end if` control structure. Ported from the verified
+// vanilla implementation in the Ruby-side HTML viewer.
+
+import type { Edge, Node } from "@xyflow/react";
+
+export type FlowKind = "terminal" | "decision" | "validation" | "action" | "assign";
+
+interface RawNode {
+  id: number;
+  kind: FlowKind;
+  label: string;
+  x: number | null;
+  y: number | null;
+}
+interface RawEdge {
+  from: number;
+  to: number;
+  label: string | null;
+}
+
+const clip = (s: string, n: number) => (s && s.length > n ? s.slice(0, n - 1) + "…" : s || "");
+
+function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
+  const begin = mdl.indexOf("\nbegin");
+  if (begin === -1) return null;
+  let body = mdl.slice(begin + 6).replace(/\nend;\s*$/, "\n");
+
+  const nodes: RawNode[] = [];
+  const edges: RawEdge[] = [];
+  let counter = 0;
+  const add = (kind: FlowKind, label: string, pos: { x: number; y: number } | null) => {
+    const id = counter++;
+    nodes.push({ id, kind, label: clip(label, 46), x: pos ? pos.x : null, y: pos ? pos.y : null });
+    return id;
+  };
+  const startId = add("terminal", "Start", null);
+  let prevs: Array<{ id: number; label: string | null }> = [{ id: startId, label: null }];
+  const stack: Array<{ id: number; inElse: boolean; trueTails: typeof prevs }> = [];
+  let pos: { x: number; y: number } | null = null;
+  let caption: string | null = null;
+  const connect = (to: number) => prevs.forEach((p) => edges.push({ from: p.id, to, label: p.label }));
+  const kindOf = (t: string): FlowKind => {
+    if (/^return\b/.test(t)) return "terminal";
+    if (/^validation\b/.test(t)) return "validation";
+    if (/\bcall\b/.test(t)) return "action";
+    if (/^(declare|set)\b/.test(t)) return "assign";
+    return "action";
+  };
+
+  let buf = "";
+  const flush = (raw: string) => {
+    const t = raw.trim();
+    if (!t) return;
+    if (/^if\b/.test(t)) {
+      const expr = t.replace(/^if\s+/, "").replace(/\s+then$/, "");
+      const id = add("decision", caption || expr, pos);
+      connect(id);
+      pos = null;
+      caption = null;
+      stack.push({ id, inElse: false, trueTails: [] });
+      prevs = [{ id, label: "true" }];
+    } else if (/^else$/.test(t)) {
+      const ctx = stack[stack.length - 1];
+      ctx.trueTails = prevs;
+      ctx.inElse = true;
+      prevs = [{ id: ctx.id, label: "false" }];
+    } else if (/^end if;?$/.test(t)) {
+      const ctx = stack.pop()!;
+      const falseTails = ctx.inElse ? prevs : [{ id: ctx.id, label: "false" }];
+      const trueTails = ctx.inElse ? ctx.trueTails : prevs;
+      prevs = trueTails.concat(falseTails);
+    } else if (/^(begin|end)\b/.test(t) || t.startsWith("@")) {
+      // annotations handled elsewhere
+    } else {
+      const id = add(kindOf(t), caption || t, pos);
+      connect(id);
+      pos = null;
+      caption = null;
+      prevs = [{ id, label: null }];
+    }
+  };
+
+  body.split("\n").forEach((line) => {
+    const l = line.trim();
+    const mp = l.match(/@position\((-?\d+),\s*(-?\d+)\)/);
+    if (mp) {
+      pos = { x: +mp[1], y: +mp[2] };
+      return;
+    }
+    const mc = l.match(/@caption\s+'([^']*)'/);
+    if (mc) {
+      caption = mc[1];
+      return;
+    }
+    if (l.startsWith("@")) return;
+    buf += (buf ? " " : "") + l;
+    if (/;$/.test(l) || /\bthen$/.test(l) || /^else$/.test(l) || /^end if;?$/.test(l) || /^if\b.*\bthen$/.test(buf)) {
+      flush(buf);
+      buf = "";
+    }
+  });
+  if (buf.trim()) flush(buf);
+  return { nodes, edges };
+}
+
+const KIND_STYLE: Record<FlowKind, React.CSSProperties> = {
+  terminal: { background: "#14351f", color: "#d7f5df", border: "1px solid #2f7d4d", borderRadius: 20 },
+  decision: { background: "#2a2340", color: "#e6e0ff", border: "1px solid #6d5bd0", borderRadius: 6 },
+  validation: { background: "#3a2a12", color: "#ffe6b8", border: "1px solid #b5851f", borderRadius: 6 },
+  action: { background: "#1d2636", color: "#d7e0ee", border: "1px solid #3a5ea8", borderRadius: 6 },
+  assign: { background: "#1d2636", color: "#d7e0ee", border: "1px solid #2a3547", borderRadius: 6 },
+};
+
+/** Build React Flow nodes/edges for a microflow/nanoflow MDL. */
+export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null {
+  const g = parseFlow(mdl);
+  if (!g || !g.nodes.length) return null;
+
+  // place nodes lacking @position by inheriting from their predecessor
+  const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
+  const posNodes = g.nodes.filter((n) => n.x != null);
+  const baseX = posNodes.length ? Math.round(posNodes.reduce((s, n) => s + (n.x as number), 0) / posNodes.length) : 0;
+  const topY = posNodes.length ? Math.min(...posNodes.map((n) => n.y as number)) : 0;
+  if (byId[0] && byId[0].x == null) {
+    byId[0].x = baseX;
+    byId[0].y = topY - 110;
+  }
+  for (let pass = 0; pass < 5; pass++) {
+    g.edges.forEach((e) => {
+      const to = byId[e.to];
+      const from = byId[e.from];
+      if (to && to.x == null && from && from.x != null) {
+        to.x = from.x;
+        to.y = (from.y as number) + 110;
+      }
+    });
+  }
+  let autoY = topY;
+  g.nodes.forEach((n) => {
+    if (n.x == null) {
+      n.x = baseX + 230;
+      n.y = autoY;
+      autoY += 90;
+    }
+  });
+
+  const sx = 0.55;
+  const sy = 0.75;
+  const minX = Math.min(...g.nodes.map((n) => n.x as number));
+  const minY = Math.min(...g.nodes.map((n) => n.y as number));
+
+  const nodes: Node[] = g.nodes.map((n) => ({
+    id: String(n.id),
+    position: { x: ((n.x as number) - minX) * sx, y: ((n.y as number) - minY) * sy },
+    data: { label: n.label },
+    style: { ...KIND_STYLE[n.kind], fontSize: 11, width: 172, padding: 6 },
+  }));
+  const edges: Edge[] = g.edges.map((e, i) => ({
+    id: `e${i}`,
+    source: String(e.from),
+    target: String(e.to),
+    label: e.label ?? undefined,
+    animated: false,
+    style: { stroke: "#6a7a94" },
+    labelStyle: { fill: "#8595ac", fontSize: 10 },
+  }));
+  return { nodes, edges };
+}
