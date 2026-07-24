@@ -2,6 +2,25 @@
 
 Ruby DSL for describing Mendix application models.
 
+## Create a Mendix project from Ruby
+
+Create a new `.mpr`, apply the complete Ruby model, run the official Mendix
+consistency check, and initialize a clean Git repository:
+
+```sh
+bin/mendix-ruby new examples/customer_app.rb \
+  --output ../customer-app \
+  --version 11.6.8
+```
+
+The command creates missing modules, stores the source model as `app.rb`, writes
+`.mendix-version` and `.gitignore`, and commits the validated result as
+`Initial Setup` on `main`. Use `--no-git` when another tool will initialize
+version control.
+
+The output directory must not exist. A failed creation is left in place for
+diagnosis and is never silently deleted.
+
 ## Run the example
 
 ```sh

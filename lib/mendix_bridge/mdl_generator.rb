@@ -18,13 +18,17 @@ module MendixBridge
       model,
       skip_associations: [],
       skip_module_roles: [],
-      skip_user_roles: []
+      skip_user_roles: [],
+      include_modules: false,
+      skip_modules: []
     )
       new(
         model,
         skip_associations:,
         skip_module_roles:,
-        skip_user_roles:
+        skip_user_roles:,
+        include_modules:,
+        skip_modules:
       ).generate
     end
 
@@ -40,16 +44,28 @@ module MendixBridge
       model,
       skip_associations: [],
       skip_module_roles: [],
-      skip_user_roles: []
+      skip_user_roles: [],
+      include_modules: false,
+      skip_modules: []
     )
       @model = model
       @skip_associations = skip_associations
       @skip_module_roles = skip_module_roles
       @skip_user_roles = skip_user_roles
+      @include_modules = include_modules
+      @skip_modules = skip_modules
     end
 
     def generate
-      statements = @model.modules.flat_map do |app_module|
+      statements = []
+      if @include_modules
+        statements.concat(@model.modules.filter_map do |app_module|
+          next if @skip_modules.include?(app_module.name)
+
+          "CREATE MODULE #{identifier(app_module.name)};"
+        end)
+      end
+      statements.concat(@model.modules.flat_map do |app_module|
         enumerations = app_module.enumerations.map do |enumeration|
           enumeration_statement(app_module, enumeration)
         end
@@ -73,7 +89,7 @@ module MendixBridge
         end
 
         module_roles + enumerations + entities + associations + microflows + pages
-      end
+      end)
 
       statements.concat(user_role_statements)
       statements.concat(project_security_statements)

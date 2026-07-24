@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "tmpdir"
 require_relative "../lib/mendix_bridge"
 
 class DSLTest < Minitest::Test
@@ -144,6 +145,45 @@ class DSLTest < Minitest::Test
     assert_includes mdl, "Active 'Active'"
     assert_includes mdl, "Waiting 'Waiting for customer''s response'"
     assert_includes mdl, ") FOLDER 'Domain/Enums';"
+  end
+
+  def test_generates_module_bootstrap_for_new_projects
+    model = MendixBridge.app("Example") do
+      modulo "CRM"
+      modulo "Existing"
+    end
+
+    mdl = MendixBridge.compile(
+      model,
+      format: :mdl,
+      include_modules: true,
+      skip_modules: ["Existing"]
+    )
+
+    assert_includes mdl, "CREATE MODULE CRM;"
+    refute_includes mdl, "CREATE MODULE Existing;"
+  end
+
+  def test_project_creator_rejects_invalid_version_before_creation
+    Dir.mktmpdir do |directory|
+      creator = MendixBridge::ProjectCreator.new(
+        mxcli: File.expand_path("../bin/mxcli", __dir__)
+      )
+      model = MendixBridge.app("Example") { modulo "CRM" }
+
+      error = assert_raises(MendixBridge::ProjectCreationError) do
+        creator.create(
+          model,
+          source_file: __FILE__,
+          output_dir: File.join(directory, "project"),
+          version: "latest",
+          git: false
+        )
+      end
+
+      assert_equal "invalid Mendix version: latest", error.message
+      refute_path_exists File.join(directory, "project")
+    end
   end
 
   def test_rejects_empty_or_duplicate_enumeration_values

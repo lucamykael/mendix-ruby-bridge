@@ -8,6 +8,43 @@ require_relative "../lib/mendix_bridge"
 command = ARGV.shift
 
 case command
+when "new"
+  options = { git: true }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby new APP.rb --output DIR --version VERSION"
+    opts.on("-o", "--output DIR", "Create the Mendix project in DIR") do |dir|
+      options[:output] = File.expand_path(dir)
+    end
+    opts.on("--version VERSION", "Mendix version, for example 11.6.8") do |version|
+      options[:version] = version
+    end
+    opts.on("--no-git", "Do not initialize Git or create the initial commit") do
+      options[:git] = false
+    end
+  end
+  parser.parse!
+  dsl_file = ARGV.shift
+  unless dsl_file && options[:output] && options[:version] && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  dsl_file = File.expand_path(dsl_file)
+  model = MendixBridge.load_file(dsl_file)
+  bridge_dir = File.expand_path("..", __dir__)
+  creator = MendixBridge::ProjectCreator.new(
+    mxcli: File.join(bridge_dir, "bin", "mxcli")
+  )
+  result = creator.create(
+    model,
+    source_file: dsl_file,
+    output_dir: options.fetch(:output),
+    version: options.fetch(:version),
+    git: options.fetch(:git)
+  )
+  puts "Created Mendix project: #{result.project_file}"
+  puts "Ruby model: #{result.model_file}"
+  puts "Git initialized with Initial Setup commit." if result.git_initialized
 when "compile"
   options = { pretty: true, format: :json }
   parser = OptionParser.new do |opts|
@@ -260,6 +297,7 @@ when "view"
 else
   warn <<~USAGE
     Usage:
+      mendix-ruby new APP.rb --output DIR --version VERSION [--no-git]
       mendix-ruby compile APP.rb [options]
       mendix-ruby import APP.mpr --output DIR [--force]
       mendix-ruby refresh [IMPORTED_DIR]
