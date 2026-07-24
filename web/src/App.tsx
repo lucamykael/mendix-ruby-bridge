@@ -102,7 +102,7 @@ export default function App() {
               </>
             )}
           </main>
-          {showToolbox && <Toolbox />}
+          {showToolbox && <Toolbox context={sel?.type} />}
         </div>
       )}
 
