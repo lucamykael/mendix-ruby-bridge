@@ -52,6 +52,69 @@ class GitWorkflowTest < Minitest::Test
     assert_equal "main", workflow.status["branch"]
   end
 
+  def test_stash_pop_validates_before_dropping_the_stash
+    workflow = MendixBridge::GitWorkflow.new(@project, mx: "/usr/bin/true")
+    File.write(@project, "stashed change")
+
+    result = workflow.stash_push(
+      studio_closed: true,
+      message: "Mendix work"
+    )
+    assert_equal true, result["clean"]
+    assert_includes workflow.stash_list, "Mendix work"
+
+    result = workflow.stash_apply(studio_closed: true, drop: true)
+    assert_equal false, result["clean"]
+    assert_equal "", workflow.stash_list
+    assert_equal "stashed change", File.read(@project)
+  end
+
+  def test_failed_stash_validation_preserves_the_stash
+    workflow = MendixBridge::GitWorkflow.new(@project, mx: "/usr/bin/true")
+    File.write(@project, "invalid model")
+    workflow.stash_push(studio_closed: true, message: "Preserve me")
+
+    failing_workflow = MendixBridge::GitWorkflow.new(@project, mx: "/usr/bin/false")
+    error = assert_raises(MendixBridge::GitWorkflowError) do
+      failing_workflow.stash_apply(studio_closed: true, drop: true)
+    end
+
+    assert_match "stash was preserved", error.message
+    assert_includes workflow.stash_list, "Preserve me"
+    assert_equal "invalid model", File.read(@project)
+  end
+
+  def test_merges_and_rebases_with_project_validation
+    workflow = MendixBridge::GitWorkflow.new(@project, mx: "/usr/bin/true")
+    workflow.create("feature/merge", studio_closed: true)
+    File.write(@project, "merged")
+    git("add", ".")
+    git("commit", "-m", "Change model")
+    workflow.switch("main", studio_closed: true)
+
+    result = workflow.merge("feature/merge", studio_closed: true)
+    assert_equal "main", result["branch"]
+    assert_equal "merged", File.read(@project)
+    assert_equal true, result["clean"]
+
+    workflow.create("feature/rebase", studio_closed: true)
+    File.write(File.join(@directory, "topic.txt"), "topic")
+    git("add", ".")
+    git("commit", "-m", "Add topic")
+    git("branch", "new-base", "main")
+    git("switch", "new-base")
+    File.write(File.join(@directory, "base.txt"), "base")
+    git("add", ".")
+    git("commit", "-m", "Advance base")
+    git("switch", "feature/rebase")
+
+    result = workflow.rebase("new-base", studio_closed: true)
+    assert_equal "feature/rebase", result["branch"]
+    assert_equal true, result["clean"]
+    assert_equal "base", File.read(File.join(@directory, "base.txt"))
+    assert_equal "topic", File.read(File.join(@directory, "topic.txt"))
+  end
+
   private
 
   def git(*arguments)

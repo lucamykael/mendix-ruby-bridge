@@ -2,6 +2,7 @@
 
 require "open3"
 require "pathname"
+require "shellwords"
 
 module MendixBridge
   class GitWorkflowError < StandardError; end
@@ -81,20 +82,109 @@ module MendixBridge
       raise error
     end
 
+    def stash_push(studio_closed:, message: nil, include_untracked: false)
+      ensure_studio_closed!(studio_closed)
+      ensure_no_operation!
+
+      arguments = ["stash", "push"]
+      arguments << "--include-untracked" if include_untracked
+      arguments.concat(["-m", message]) if message
+      output = git!(*arguments)
+      { "output" => output.strip, **status }
+    end
+
+    def stash_list
+      git!("stash", "list")
+    end
+
+    def stash_show(reference = "stash@{0}")
+      git!("stash", "show", "--stat", reference)
+    end
+
+    def stash_apply(reference = "stash@{0}", studio_closed:, drop: false)
+      ensure_switch_ready!(current_branch, studio_closed:)
+      output, error, result = Open3.capture3(
+        "git", "-C", @root, "stash", "apply", "--index", reference
+      )
+      unless result.success?
+        raise GitWorkflowError,
+          "stash apply has conflicts; the stash was preserved:\n#{error}#{output}"
+      end
+
+      begin
+        validate_project!
+        refresh_inventory! if @inventory_dir
+      rescue StandardError => validation_error
+        raise GitWorkflowError,
+          "#{validation_error.message}\nthe stash was preserved and its changes remain in the working tree"
+      end
+
+      git!("stash", "drop", reference) if drop
+      status
+    end
+
+    def stash_drop(reference = "stash@{0}")
+      git!("stash", "drop", reference).strip
+    end
+
+    def merge(branch, studio_closed:)
+      ensure_switch_ready!(branch, studio_closed:)
+      output, error, result = Open3.capture3(
+        "git", "-C", @root, "merge", "--no-ff", "--no-commit", branch
+      )
+      unless result.success?
+        raise GitWorkflowError,
+          "merge has conflicts; resolve them or run git merge --abort:\n#{error}#{output}"
+      end
+
+      begin
+        validate_project!
+      rescue StandardError => validation_error
+        raise GitWorkflowError,
+          "#{validation_error.message}\nmerge was not committed; run git merge --abort"
+      end
+
+      git!("commit", "--no-edit")
+      refresh_inventory! if @inventory_dir
+      status
+    end
+
+    def rebase(branch, studio_closed:)
+      ensure_switch_ready!(branch, studio_closed:)
+      validation = [
+        Shellwords.escape(@mx),
+        "check",
+        Shellwords.escape(@project_file)
+      ].join(" ")
+      output, error, result = Open3.capture3(
+        "git", "-C", @root, "rebase", "--exec", validation, branch
+      )
+      unless result.success?
+        raise GitWorkflowError,
+          "rebase stopped; resolve the issue and continue, or run git rebase --abort:\n#{error}#{output}"
+      end
+
+      refresh_inventory! if @inventory_dir
+      status
+    end
+
     private
 
     def ensure_switch_ready!(branch, studio_closed:)
-      raise GitWorkflowError, "confirm Studio Pro is closed with --studio-closed" unless studio_closed
+      ensure_studio_closed!(studio_closed)
       raise GitWorkflowError, "working tree is dirty; commit or stash changes first" unless clean?
-      if operation_in_progress
-        raise GitWorkflowError, "Git operation in progress: #{operation_in_progress}"
-      end
+      ensure_no_operation!
 
       _output, error, status = Open3.capture3("git", "check-ref-format", "--branch", branch)
       raise GitWorkflowError, "invalid branch name: #{branch} (#{error.strip})" unless status.success?
     end
 
     def validate_and_refresh!
+      validate_project!
+      refresh_inventory! if @inventory_dir
+    end
+
+    def validate_project!
       raise GitWorkflowError, "project file is absent on branch #{current_branch}" unless File.file?(@project_file)
       verify_project_tracking!
 
@@ -102,8 +192,6 @@ module MendixBridge
       unless status.success?
         raise GitWorkflowError, "Mendix consistency check failed:\n#{error}#{output}"
       end
-
-      refresh_inventory! if @inventory_dir
     end
 
     def refresh_inventory!
@@ -127,6 +215,16 @@ module MendixBridge
       git!("switch", previous) if clean? && current_branch != previous
     rescue GitWorkflowError
       nil
+    end
+
+    def ensure_studio_closed!(studio_closed)
+      raise GitWorkflowError, "confirm Studio Pro is closed with --studio-closed" unless studio_closed
+    end
+
+    def ensure_no_operation!
+      return unless operation_in_progress
+
+      raise GitWorkflowError, "Git operation in progress: #{operation_in_progress}"
     end
 
     def resolve_mx
