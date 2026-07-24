@@ -95,6 +95,18 @@ class BackendServerTest < Minitest::Test
     refute JSON.parse(install.body)["ok"]
   end
 
+  def test_git_routes_report_unavailable_without_a_tracked_project
+    health = get_json("/api/health")
+    assert_equal false, health.dig("capabilities", "git")
+
+    status = Net::HTTP.get_response(uri("/api/git/status"))
+    assert_equal "503", status.code
+    assert JSON.parse(status.body)["error"]
+
+    switch = post_json("/api/git/switch", branch: "main", studio_closed: true)
+    assert_equal "503", switch.code
+  end
+
   def test_saves_visual_entity_plan_without_modifying_project
     response = post_json(
       "/api/entity-plan",

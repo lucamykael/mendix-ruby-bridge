@@ -15,6 +15,10 @@ const CONTAINERS = new Set([
   "tabcontainer", "tabpage", "footer", "snippetcall", "listview", "templategrid", "sidebartoggle",
 ]);
 
+// Pure layout wrappers: render as invisible flex so nested grids/rows/columns
+// don't pile up borders and labels. Semantic containers keep their chrome.
+const STRUCTURAL = new Set(["layoutgrid", "row", "column", "container", "scrollcontainer"]);
+
 function Leaf({ w, onSelect }: { w: WidgetNode; onSelect: (qn: string) => void }) {
   const p = widgetProps(w);
   const t = w.type.toLowerCase();
@@ -70,12 +74,15 @@ function Node({ w, onSelect }: { w: WidgetNode; onSelect: (qn: string) => void }
   if (!w.children || !CONTAINERS.has(t)) return <Leaf w={w} onSelect={onSelect} />;
 
   const dir = t === "row" ? "row" : "column";
-  const labelled = t !== "layoutgrid" && t !== "row" && t !== "column";
+  const structural = STRUCTURAL.has(t);
   const p = widgetProps(w);
 
   return (
-    <div className={`w-box w-${t}`} style={{ display: "flex", flexDirection: dir, flex: t === "column" ? 1 : undefined }}>
-      {labelled && (
+    <div
+      className={`${structural ? "w-struct" : "w-box"} w-${t}`}
+      style={{ display: "flex", flexDirection: dir, flex: t === "column" ? 1 : undefined }}
+    >
+      {!structural && (
         <div className="w-box-head">
           {w.type}
           {w.name ? ` · ${w.name}` : ""}

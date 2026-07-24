@@ -75,6 +75,7 @@ module MendixBridge
       @server.mount_proc("/api/marketplace/item") do |request, response|
         marketplace_item(request, response)
       end
+      @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
       @server.mount_proc("/api/marketplace/install") do |_request, response|
         json(
           response,
@@ -128,7 +129,8 @@ module MendixBridge
             ),
             layout_persistence: true,
             visual_entity_plans: true,
-            marketplace_install: false
+            marketplace_install: false,
+            git: git_workflow ? true : false
           }
         }
       )
@@ -221,6 +223,74 @@ module MendixBridge
       json(response, { error: error.message }, status: 502)
     rescue JSON::ParserError
       json(response, { error: "mxcli returned invalid marketplace JSON" }, status: 502)
+    end
+
+    # Guarded Git operations for the imported Mendix project, surfaced to the
+    # viewer. Mutating actions require `studio_closed: true` (Studio Pro locks
+    # the .mpr), matching bin/mendix-git. Returns 503 when the Git/Mendix
+    # toolchain is unavailable so the frontend can hide the panel.
+    def git_route(request, response)
+      workflow = git_workflow
+      return json(response, { error: git_workflow_error }, status: 503) unless workflow
+
+      action = request.path.delete_prefix("/api/git").sub(%r{\A/}, "")
+      post = request.request_method == "POST"
+      payload = post && !request.body.to_s.empty? ? JSON.parse(request.body.to_s) : {}
+      closed = payload["studio_closed"] == true
+
+      result =
+        case [request.request_method, action]
+        when ["GET", "status"] then workflow.status
+        when ["GET", "branches"] then { "branches" => workflow.branches, "current" => workflow.status["branch"] }
+        when ["GET", "stash"] then { "stash" => workflow.stash_list.lines.map(&:strip).reject(&:empty?) }
+        when ["POST", "fetch"] then workflow.fetch && workflow.status
+        when ["POST", "switch"] then workflow.switch(payload.fetch("branch"), studio_closed: closed)
+        when ["POST", "create"] then workflow.create(payload.fetch("branch"), studio_closed: closed)
+        when ["POST", "commit"] then workflow.commit(payload.fetch("message"), studio_closed: closed)
+        when ["POST", "stash"]
+          workflow.stash_push(
+            studio_closed: closed,
+            message: payload["message"],
+            include_untracked: payload["include_untracked"] == true
+          )
+        when ["POST", "stash/apply"]
+          workflow.stash_apply(
+            payload.fetch("reference", "stash@{0}"),
+            studio_closed: closed,
+            drop: payload["drop"] == true
+          )
+        when ["POST", "stash/drop"]
+          { "dropped" => workflow.stash_drop(payload.fetch("reference", "stash@{0}")) }
+        else
+          return json(response, { error: "unknown git action" }, status: 404)
+        end
+
+      json(response, result)
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    rescue GitWorkflowError => error
+      json(response, { error: error.message }, status: 409)
+    end
+
+    def git_workflow
+      return @git_workflow if defined?(@git_workflow)
+
+      @git_workflow_error = nil
+      metadata_path = File.join(@inventory_dir, "mendix-project.json")
+      source = File.file?(metadata_path) ? JSON.parse(File.read(metadata_path))["source_project"] : nil
+      @git_workflow =
+        if source && File.file?(source)
+          GitWorkflow.new(source, inventory_dir: @inventory_dir, mxcli: @mxcli)
+        end
+    rescue GitWorkflowError, JSON::ParserError => error
+      @git_workflow_error = error.message
+      @git_workflow = nil
+    end
+
+    def git_workflow_error
+      @git_workflow_error || "Git workflow is unavailable for this project."
     end
 
     def run_mxcli(*arguments)
