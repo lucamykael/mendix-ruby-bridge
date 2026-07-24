@@ -84,6 +84,20 @@ class GitWorkflowTest < Minitest::Test
     assert_equal "invalid model", File.read(@project)
   end
 
+  def test_commit_stages_the_project_and_rejects_an_empty_commit
+    workflow = MendixBridge::GitWorkflow.new(@project, mx: "/usr/bin/true")
+    File.write(@project, "edited model")
+
+    result = workflow.commit("Update model", studio_closed: true)
+    assert_equal true, result["clean"]
+    assert_equal "Update model", `git -C #{@directory} log -1 --format=%s`.strip
+
+    error = assert_raises(MendixBridge::GitWorkflowError) do
+      workflow.commit("nothing staged", studio_closed: true)
+    end
+    assert_match "nothing to commit", error.message
+  end
+
   def test_merges_and_rebases_with_project_validation
     workflow = MendixBridge::GitWorkflow.new(@project, mx: "/usr/bin/true")
     workflow.create("feature/merge", studio_closed: true)

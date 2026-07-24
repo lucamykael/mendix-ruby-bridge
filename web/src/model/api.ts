@@ -140,6 +140,57 @@ function entityPlanError(qn: string, reason: string): EntityPlanResult {
   };
 }
 
+// ---- guarded Git workflow --------------------------------------------------
+// Mutations require confirming Studio Pro is closed (it locks the .mpr). Unlike
+// the marketplace/layout helpers these never fake success: a failed guard or a
+// dirty tree must surface as a real error the panel can show.
+
+export interface GitStatus {
+  branch: string;
+  clean: boolean;
+  operation_in_progress: string | null;
+  ready_to_switch: boolean;
+  project?: string;
+  project_tracked?: boolean;
+}
+
+async function gitRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(`${BASE}/git${path}`, init);
+  const body = (await r.json().catch(() => ({}))) as T & { error?: string };
+  if (!r.ok) throw new Error(body.error ?? `Git request failed (${r.status}).`);
+  return body as T;
+}
+
+function gitPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  return gitRequest<T>(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export const git = {
+  status: () => gitRequest<GitStatus>("/status"),
+  branches: () => gitRequest<{ branches: string[]; current: string }>("/branches"),
+  stashList: () => gitRequest<{ stash: string[] }>("/stash"),
+  fetch: () => gitPost<GitStatus>("/fetch", {}),
+  switch: (branch: string, studioClosed: boolean) =>
+    gitPost<GitStatus>("/switch", { branch, studio_closed: studioClosed }),
+  create: (branch: string, studioClosed: boolean) =>
+    gitPost<GitStatus>("/create", { branch, studio_closed: studioClosed }),
+  commit: (message: string, studioClosed: boolean) =>
+    gitPost<GitStatus>("/commit", { message, studio_closed: studioClosed }),
+  stashPush: (message: string, includeUntracked: boolean, studioClosed: boolean) =>
+    gitPost<GitStatus & { output: string }>("/stash", {
+      message: message || undefined,
+      include_untracked: includeUntracked,
+      studio_closed: studioClosed,
+    }),
+  stashApply: (reference: string, drop: boolean, studioClosed: boolean) =>
+    gitPost<GitStatus>("/stash/apply", { reference, drop, studio_closed: studioClosed }),
+  stashDrop: (reference: string) => gitPost<{ dropped: string }>("/stash/drop", { reference }),
+};
+
 // ---- offline fixture -------------------------------------------------------
 const FIXTURE: MarketplaceItem[] = [
   { id: "1866", name: "Community Commons", publisher: "Mendix", latestVersion: "10.0.4", category: "Utility", rating: 4.6, downloads: 240000, summary: "Widely-used helper functions (Java actions) for strings, dates, files and more." },

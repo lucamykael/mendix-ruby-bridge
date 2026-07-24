@@ -1,7 +1,30 @@
 /* Theme palettes. Semantic variables consumed across the app; each [data-theme]
-   overrides them. Default (Studio Pro dark) lives on :root. */
+   overrides them. Default (Ruby) lives on :root so a fresh viewer opens
+   in the Ruby palette; Studio Pro and the editor themes remain selectable. */
 
 :root,
+[data-theme="ruby"] {
+  --bg: #1a1113;
+  --panel: #211618;
+  --panel2: #2c1c1f;
+  --line: #43272b;
+  --fg: #f2e3e3;
+  --muted: #b48d90;
+  --accent: #d81f26;
+  --sel: #5a1f24;
+  --canvas-bg: #1e1416;
+  --grid: #3a2327;
+  --node-start: #2f9e44;
+  --node-end: #d81f26;
+  --node-activity: #a4243b;
+  --node-activity-fg: #ffe3e3;
+  --node-decision: #e8a13a;
+  --node-decision-fg: #2e1c05;
+  --node-merge: #ff5a5f;
+  --node-line: #7a4348;
+  --edge: #9a6a6e;
+}
+
 [data-theme="studio-pro"] {
   --bg: #171d29;
   --panel: #1b2230;

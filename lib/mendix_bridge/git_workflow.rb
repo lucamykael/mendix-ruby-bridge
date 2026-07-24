@@ -168,7 +168,30 @@ module MendixBridge
       status
     end
 
+    # Stages the Mendix project directory and commits it. Deliberately skips the
+    # `mx check` consistency validation so work-in-progress (even inconsistent)
+    # state can be committed; branch switches still guard against a dirty tree.
+    def commit(message, studio_closed:)
+      ensure_studio_closed!(studio_closed)
+      ensure_no_operation!
+      message = message.to_s.strip
+      raise GitWorkflowError, "commit message cannot be empty" if message.empty?
+      verify_project_tracking!
+
+      git!("add", "--", project_pathspec)
+      raise GitWorkflowError, "nothing to commit; the project has no staged changes" if
+        git!("diff", "--cached", "--name-only").strip.empty?
+
+      git!("commit", "-m", message)
+      status
+    end
+
     private
+
+    def project_pathspec
+      relative = Pathname.new(@project_dir).relative_path_from(Pathname.new(@root)).to_s
+      relative == "." ? "." : relative
+    end
 
     def ensure_switch_ready!(branch, studio_closed:)
       ensure_studio_closed!(studio_closed)
