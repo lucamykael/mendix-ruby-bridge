@@ -22,7 +22,9 @@ parser = OptionParser.new do |opts|
 end
 
 parser.parse!
-dsl_file = ARGV.shift
+project_config = MendixBridge::Config.find
+dsl_file = ARGV.shift || project_config&.model
+options[:project] ||= project_config&.project
 
 unless dsl_file && options[:project] && ARGV.empty?
   warn parser

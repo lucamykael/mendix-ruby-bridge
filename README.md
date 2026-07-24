@@ -21,6 +21,31 @@ version control.
 The output directory must not exist. A failed creation is left in place for
 diagnosis and is never silently deleted.
 
+## Project configuration
+
+Store the frequently used paths once:
+
+```sh
+bin/mendix-ruby configure \
+  --project ../mendix-app/App.mpr \
+  --inventory ../ruby-inventory \
+  --model app.rb
+```
+
+This writes `.mendix-ruby.yml` with paths relative to the configuration file.
+The CLI discovers it from the current directory or any parent. Explicit command
+arguments always take priority.
+
+With configuration present, common commands become:
+
+```sh
+bin/mendix-ruby import --force
+bin/mendix-ruby compile --format mdl
+bin/mendix-ruby plan
+bin/mendix-ruby deps CRM.Customer --direction impact
+bin/mendix-apply
+```
+
 ## Explicit migrations and rollback
 
 Destructive changes live in a separate migration file:
