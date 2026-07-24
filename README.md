@@ -380,6 +380,13 @@ positions. Layout positions live in `inventory/ui-layouts.json`; they do not
 modify the source `.mpr`. Marketplace installation is intentionally disabled
 in the viewer and remains available through the guarded CLI/Git workflow.
 
+For parsed entities, choose **Edit entity** to create a visual draft. The editor
+supports entity persistence plus adding or changing attributes and sends the
+desired state to `POST /api/entity-plan`. Ruby validates it with the same change
+planner used by the CLI, returns `keep`, `modify`, or `blocked`, and stores the
+reviewable draft in `inventory/visual-plans.json`. This preview never modifies
+the source `.mpr`; destructive or migration-sensitive changes remain blocked.
+
 Query dependencies, dependents, callers, callees, and downstream impact:
 
 ```sh

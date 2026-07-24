@@ -25,6 +25,7 @@ require_relative "mendix_bridge/migration_executor"
 require_relative "mendix_bridge/dependency_index"
 require_relative "mendix_bridge/config"
 require_relative "mendix_bridge/backend_server"
+require_relative "mendix_bridge/visual_entity_plan"
 require_relative "mendix_bridge/html_viewer"
 require_relative "mendix_bridge/git_workflow"
 

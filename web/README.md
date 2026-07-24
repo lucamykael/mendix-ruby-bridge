@@ -17,6 +17,9 @@ interactive, node-based canvas.
 - **Dependency navigation** from `inventory/dependencies.json`.
 - **Persisted canvas positions** in the Ruby inventory sidecar
   `inventory/ui-layouts.json`. This does not modify the source `.mpr`.
+- **Visual entity drafts** for persistence and attributes. Ruby validates the
+  desired state and stores its plan in `inventory/visual-plans.json`; the draft
+  does not modify the source `.mpr`.
 - **Marketplace browsing** through `mxcli`. Installation remains disabled in
   the viewer and must use the guarded CLI/Git workflow.
 

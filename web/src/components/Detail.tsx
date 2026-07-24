@@ -1,5 +1,6 @@
 import type { DependencyEdge, ElementDetail } from "../model/types";
 import type { Selection } from "./Tree";
+import EntityEditor from "./EntityEditor";
 
 interface Props {
   selection: Selection;
@@ -117,6 +118,9 @@ export default function Detail({ selection, detail, incoming, outgoing, onSelect
         {selection.type} · {selection.qn}
         {detail.parse_status && <span className={"pill " + (detail.parse_status === "parsed" ? "ok" : "warn")}>{detail.parse_status}</span>}
       </div>
+      {selection.type === "entity" && (
+        <EntityEditor qn={selection.qn} detail={detail} />
+      )}
       <Dependencies incoming={incoming} outgoing={outgoing} onSelect={onSelect} />
       {keys.map((k) => {
         const v = detail[k];
