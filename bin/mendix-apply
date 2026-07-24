@@ -7,13 +7,23 @@ require "pathname"
 require "tempfile"
 require_relative "../lib/mendix_bridge"
 
-options = { allow_dirty: false }
+$stdout.sync = true
+
+options = { allow_dirty: false, confirmed: false }
 
 parser = OptionParser.new do |opts|
-  opts.banner = "Usage: mendix-apply APP.rb --project APP.mpr"
+  opts.banner = "Usage: mendix-apply APP.rb --project APP.mpr --inventory IMPORTED_DIR --yes"
 
   opts.on("-p", "--project FILE", "Target Mendix .mpr file") do |file|
     options[:project] = File.expand_path(file)
+  end
+
+  opts.on("-i", "--inventory DIR", "Imported Mendix Ruby project") do |dir|
+    options[:inventory] = File.expand_path(dir)
+  end
+
+  opts.on("--yes", "Confirm application of the reviewed plan") do
+    options[:confirmed] = true
   end
 
   opts.on("--allow-dirty", "Allow a target repository with uncommitted changes") do
@@ -24,13 +34,14 @@ end
 parser.parse!
 dsl_file = ARGV.shift
 
-unless dsl_file && options[:project] && ARGV.empty?
+unless dsl_file && options[:project] && options[:inventory] && ARGV.empty?
   warn parser
   exit 1
 end
 
 dsl_file = File.expand_path(dsl_file)
 project_file = options.fetch(:project)
+inventory_dir = options.fetch(:inventory)
 project_dir = File.dirname(project_file)
 bridge_dir = File.expand_path("..", __dir__)
 mxcli = File.join(bridge_dir, "bin", "mxcli")
@@ -39,6 +50,17 @@ version_file = File.join(project_dir, ".mendix-version")
 abort "DSL file does not exist: #{dsl_file}" unless File.file?(dsl_file)
 abort "Mendix project does not exist: #{project_file}" unless File.file?(project_file)
 abort "Missing #{version_file}" unless File.file?(version_file)
+
+metadata_file = File.join(inventory_dir, "mendix-project.json")
+snapshot_file = File.join(inventory_dir, "inventory", "project-tree.json")
+abort "Not an imported Mendix Ruby project: #{inventory_dir}" unless
+  File.file?(metadata_file) && File.file?(snapshot_file)
+
+metadata = JSON.parse(File.read(metadata_file))
+recorded_project = File.realpath(metadata.fetch("source_project"))
+unless recorded_project == File.realpath(project_file)
+  abort "Inventory belongs to a different Mendix project: #{recorded_project}"
+end
 
 git_root, git_error, git_status = Open3.capture3(
   "git", "-C", project_dir, "rev-parse", "--show-toplevel"
@@ -56,6 +78,29 @@ mx = File.join(Dir.home, ".mxcli", "mxbuild", version, "modeler", "mx")
 abort "Mendix mx #{version} is not installed: #{mx}" unless File.executable?(mx)
 
 model = MendixBridge.load_file(dsl_file)
+
+puts "Refreshing the read-only inventory before planning..."
+importer = MendixBridge::Importer.new(mxcli:)
+inventory, import_warnings = importer.import(project_file, inventory_dir)
+unless import_warnings.empty?
+  import_warnings.each { |warning| warn "  #{warning}" }
+  abort "Could not safely refresh all managed elements"
+end
+
+plan = MendixBridge::ChangePlanner.plan(model, inventory)
+plan.operations.each do |operation|
+  puts "#{operation.action.upcase}\t#{operation.type}\t#{operation.name}"
+  puts "  Reason: #{operation.reason}" if operation.reason
+end
+puts "Preserved undeclared entities/associations: #{plan.preserved_undeclared}"
+abort "Plan contains blocked operations; nothing was written" if plan.blocked?
+
+applicable = plan.operations.select { |operation| %w[create modify].include?(operation.action) }
+if applicable.empty?
+  puts "No applicable changes; nothing was written."
+  exit 0
+end
+abort "Review the plan and rerun with --yes to apply it" unless options[:confirmed]
 
 existing_associations = model.modules.flat_map do |app_module|
   output, error, status = Open3.capture3(
@@ -104,4 +149,10 @@ Tempfile.create(["mendix-ruby-bridge-", ".mdl"]) do |file|
 end
 
 puts "Application completed successfully."
+puts "Refreshing the inventory after the successful application..."
+_inventory, refresh_warnings = importer.import(project_file, inventory_dir)
+unless refresh_warnings.empty?
+  warn "Application succeeded, but some imported details could not be refreshed:"
+  refresh_warnings.each { |warning| warn "  #{warning}" }
+end
 puts "Review the changes with: git -C #{git_root} status --short"
