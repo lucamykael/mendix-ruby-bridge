@@ -8,6 +8,94 @@ require_relative "../lib/mendix_bridge"
 command = ARGV.shift
 
 case command
+when "migrate"
+  options = { studio_closed: false, dry_run: false }
+  parser = OptionParser.new do |opts|
+    opts.banner =
+      "Usage: mendix-ruby migrate MIGRATION.rb --project APP.mpr [options]"
+    opts.on("-p", "--project FILE", "Target Mendix .mpr file") do |file|
+      options[:project] = File.expand_path(file)
+    end
+    opts.on("--confirm NAME", "Confirm the exact migration name") do |name|
+      options[:confirmation] = name
+    end
+    opts.on("--studio-closed", "Confirm that Studio Pro is closed") do
+      options[:studio_closed] = true
+    end
+    opts.on("--dry-run", "Print operations and MDL without changing the project") do
+      options[:dry_run] = true
+    end
+  end
+  parser.parse!
+  migration_file = ARGV.shift
+  unless migration_file && options[:project] && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  plan = MendixBridge.load_migration(File.expand_path(migration_file))
+  if options[:dry_run]
+    puts JSON.pretty_generate(plan.to_h)
+    mdl = MendixBridge::Migration::Generator.mdl(plan)
+    puts "\nMDL:\n#{mdl}" unless mdl.empty?
+    renames = MendixBridge::Migration::Generator.rename_operations(plan)
+    unless renames.empty?
+      puts "\nRenames:"
+      renames.each do |operation|
+        puts "  #{operation.type} #{operation.name} -> #{operation.options.fetch('to')}"
+      end
+    end
+    exit
+  end
+
+  unless options[:confirmation]
+    abort "Destructive migration requires --confirm #{plan.name}"
+  end
+  bridge_dir = File.expand_path("..", __dir__)
+  executor = MendixBridge::MigrationExecutor.new(
+    mxcli: File.join(bridge_dir, "bin", "mxcli")
+  )
+  result = executor.apply(
+    plan,
+    project_file: options.fetch(:project),
+    confirmation: options.fetch(:confirmation),
+    studio_closed: options.fetch(:studio_closed)
+  )
+  puts "Migration #{plan.name} completed (#{result.operations} operations)."
+  puts "Rollback backup: #{result.backup_dir}"
+when "rollback"
+  options = { studio_closed: false }
+  parser = OptionParser.new do |opts|
+    opts.banner =
+      "Usage: mendix-ruby rollback BACKUP_DIR --project APP.mpr [options]"
+    opts.on("-p", "--project FILE", "Target Mendix .mpr file") do |file|
+      options[:project] = File.expand_path(file)
+    end
+    opts.on("--confirm BACKUP_ID", "Confirm the exact backup directory name") do |name|
+      options[:confirmation] = name
+    end
+    opts.on("--studio-closed", "Confirm that Studio Pro is closed") do
+      options[:studio_closed] = true
+    end
+  end
+  parser.parse!
+  backup_dir = ARGV.shift
+  unless backup_dir && options[:project] && options[:confirmation] && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  bridge_dir = File.expand_path("..", __dir__)
+  executor = MendixBridge::MigrationExecutor.new(
+    mxcli: File.join(bridge_dir, "bin", "mxcli")
+  )
+  executor.restore(
+    backup_dir,
+    project_file: options.fetch(:project),
+    confirmation: options.fetch(:confirmation),
+    studio_closed: options.fetch(:studio_closed)
+  )
+  puts "Backup restored successfully: #{backup_dir}"
 when "new"
   options = { git: true }
   parser = OptionParser.new do |opts|
@@ -297,6 +385,8 @@ when "view"
 else
   warn <<~USAGE
     Usage:
+      mendix-ruby migrate MIGRATION.rb --project APP.mpr [--dry-run]
+      mendix-ruby rollback BACKUP_DIR --project APP.mpr
       mendix-ruby new APP.rb --output DIR --version VERSION [--no-git]
       mendix-ruby compile APP.rb [options]
       mendix-ruby import APP.mpr --output DIR [--force]
