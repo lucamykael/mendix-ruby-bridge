@@ -165,3 +165,8 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
   aside { width: 180px; }
   header .app-name { display: none; }
 }
+
+/* drag-to-add affordance */
+.pageview-canvas.drop-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.tb-item { cursor: grab; }
+.tb-item:active { cursor: grabbing; }

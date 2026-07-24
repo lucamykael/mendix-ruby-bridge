@@ -87,7 +87,16 @@ export default function Toolbox({ context }: { context?: string }) {
           <div className="tb-group-title">{g.title}</div>
           <div className="tb-items">
             {g.items.map((it) => (
-              <div className="tb-item" key={it.label} title={it.label}>
+              <div
+                className="tb-item"
+                key={it.label}
+                title={`Drag onto the canvas to add ${it.label}`}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("application/mrb-item", JSON.stringify(it));
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+              >
                 <span className="tb-icon">{it.icon}</span>
                 <span className="tb-label">{it.label}</span>
               </div>
