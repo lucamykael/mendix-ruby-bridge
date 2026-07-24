@@ -43,10 +43,14 @@ module MendixBridge
       operations = @model.modules.flat_map { |app_module| plan_module(app_module) }
       operations.concat(@model.user_roles.map { |role| plan_user_role(role) })
       operations << plan_project_security(@model.project_security) if @model.project_security
+      operations.concat(
+        @model.navigation_profiles.map { |profile| plan_navigation(profile) }
+      )
       declared = operations.map { |operation| "#{operation.type}:#{operation.name}" }.to_set
       managed_types = %w[
         entity association enumeration microflow page
         modulerole userrole projectsecurity
+        navprofile
       ]
       preserved = @inventory.elements.count do |element|
         managed_types.include?(element.type) &&
@@ -206,6 +210,63 @@ module MendixBridge
           action: "modify",
           type: "projectsecurity",
           name: "ProjectSecurity",
+          changes: { "from" => current, "to" => desired },
+          reason: nil
+        )
+      end
+    end
+
+    def plan_navigation(profile)
+      existing = @inventory.find(profile.name)
+      mdl = MDLGenerator.new(
+        Model::App.new(
+          name: "NavigationPlan",
+          version: nil,
+          modules: [],
+          user_roles: [],
+          project_security: nil,
+          navigation_profiles: [profile]
+        )
+      ).generate
+      desired = DocumentParser.parse("navprofile", "mdl" => mdl)
+      comparable_keys = %w[
+        home_page role_home_pages login_page not_found_page menu_groups menu_items
+      ]
+      desired = desired.slice(*comparable_keys)
+
+      return Operation.new(
+        action: "create",
+        type: "navprofile",
+        name: profile.name,
+        changes: desired,
+        reason: nil
+      ) unless existing
+
+      details = existing.details
+      unless existing.type == "navprofile" && details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "navprofile",
+          name: profile.name,
+          changes: nil,
+          reason: "existing navigation profile does not have parsed semantic details"
+        )
+      end
+
+      current = details.slice(*comparable_keys)
+      if current == desired
+        Operation.new(
+          action: "keep",
+          type: "navprofile",
+          name: profile.name,
+          changes: nil,
+          reason: nil
+        )
+      else
+        Operation.new(
+          action: "modify",
+          type: "navprofile",
+          name: profile.name,
           changes: { "from" => current, "to" => desired },
           reason: nil
         )

@@ -319,6 +319,42 @@ class DSLTest < Minitest::Test
       "(READ (Name), WRITE (Name)) WHERE '[Owner = ''[%CurrentUser%]'']';"
   end
 
+  def test_builds_generates_and_plans_navigation
+    model = MendixBridge.app("Example") do
+      navigation_profile "Responsive",
+        home_page: "CRM.Home",
+        login_page: "CRM.Login",
+        not_found_page: "CRM.NotFound" do
+        home_page "CRM.AdminHome", for_role: "CRM.Admin"
+        menu_item "Home", page: "CRM.Home"
+        menu "Customers" do
+          menu_item "Overview", page: "CRM.Customer_Overview"
+          menu_item "Refresh", nanoflow: "CRM.ACT_Refresh"
+        end
+      end
+
+      modulo "CRM"
+    end
+
+    mdl = MendixBridge.compile(model, format: :mdl)
+    assert_includes mdl, "CREATE OR REPLACE NAVIGATION Responsive"
+    assert_includes mdl, "HOME PAGE CRM.AdminHome FOR CRM.Admin"
+    assert_includes mdl, "LOGIN PAGE CRM.Login"
+    assert_includes mdl, "NOT FOUND PAGE CRM.NotFound"
+    assert_includes mdl, "MENU 'Customers' ("
+    assert_includes mdl, "MENU ITEM 'Refresh' NANOFLOW CRM.ACT_Refresh;"
+
+    inventory = MendixBridge::Inventory.new(
+      [{ "label" => "CRM", "type" => "module", "qualifiedName" => "CRM" }]
+    )
+    operation = MendixBridge::ChangePlanner.plan(model, inventory).operations
+      .find { |candidate| candidate.type == "navprofile" }
+    assert_equal "create", operation.action
+    assert_equal "CRM.Home", operation.changes["home_page"]
+    assert_equal ["Customers"], operation.changes["menu_groups"]
+    assert_equal "CRM.ACT_Refresh", operation.changes.dig("menu_items", 2, "target")
+  end
+
   def test_can_skip_an_existing_association
     model = MendixBridge.app("Example") do
       modulo "CRM" do

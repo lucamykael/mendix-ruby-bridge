@@ -33,6 +33,7 @@ module MendixBridge
         @modules = []
         @user_roles = []
         @project_security = nil
+        @navigation_profiles = []
       end
 
       def modulo(name, &block)
@@ -71,13 +72,33 @@ module MendixBridge
         )
       end
 
+      def navigation_profile(
+        name,
+        home_page:,
+        login_page: nil,
+        not_found_page: nil,
+        &block
+      )
+        raise ArgumentError, "duplicate navigation profile: #{name}" if
+          @navigation_profiles.any? { |profile| profile.name == name.to_s }
+
+        @navigation_profiles << NavigationBuilder.build(
+          name,
+          home_page:,
+          login_page:,
+          not_found_page:,
+          &block
+        )
+      end
+
       def result
         Model::App.new(
           name: @name,
           version: @version,
           modules: @modules,
           user_roles: @user_roles,
-          project_security: @project_security
+          project_security: @project_security,
+          navigation_profiles: @navigation_profiles
         )
       end
 
@@ -92,6 +113,91 @@ module MendixBridge
         return unless items.any? { |item| item.name == name.to_s }
 
         raise ArgumentError, "duplicate #{kind}: #{name}"
+      end
+    end
+
+    class NavigationBuilder
+      def self.build(name, home_page:, login_page: nil, not_found_page: nil, &block)
+        builder = new(name, home_page, login_page, not_found_page)
+        builder.instance_eval(&block) if block
+        builder.result
+      end
+
+      def initialize(name, home_page, login_page, not_found_page)
+        @name = name.to_s
+        @home_page = home_page.to_s
+        @login_page = login_page&.to_s
+        @not_found_page = not_found_page&.to_s
+        @role_home_pages = []
+        @items = []
+      end
+
+      def home_page(page, for_role:)
+        role = for_role.to_s
+        raise ArgumentError, "duplicate role home page: #{role}" if
+          @role_home_pages.any? { |entry| entry.role == role }
+
+        @role_home_pages << Model::RoleHomePage.new(role:, page: page.to_s)
+      end
+
+      def menu_item(caption, page: nil, microflow: nil, nanoflow: nil)
+        @items << build_item(caption, page:, microflow:, nanoflow:)
+      end
+
+      def menu(caption, &block)
+        builder = NavigationMenuBuilder.new
+        builder.instance_eval(&block)
+        @items << Model::NavigationMenu.new(
+          caption: caption.to_s,
+          items: builder.items
+        )
+      end
+
+      def result
+        Model::NavigationProfile.new(
+          name: @name,
+          home_page: @home_page,
+          role_home_pages: @role_home_pages,
+          login_page: @login_page,
+          not_found_page: @not_found_page,
+          items: @items
+        )
+      end
+
+      private
+
+      def build_item(caption, page:, microflow:, nanoflow:)
+        targets = { "page" => page, "microflow" => microflow, "nanoflow" => nanoflow }
+          .reject { |_action, target| target.nil? }
+        raise ArgumentError, "menu item requires exactly one target" unless targets.length == 1
+
+        action, target = targets.first
+        Model::NavigationItem.new(
+          caption: caption.to_s,
+          action:,
+          target: target.to_s
+        )
+      end
+    end
+
+    class NavigationMenuBuilder
+      attr_reader :items
+
+      def initialize
+        @items = []
+      end
+
+      def menu_item(caption, page: nil, microflow: nil, nanoflow: nil)
+        targets = { "page" => page, "microflow" => microflow, "nanoflow" => nanoflow }
+          .reject { |_action, target| target.nil? }
+        raise ArgumentError, "menu item requires exactly one target" unless targets.length == 1
+
+        action, target = targets.first
+        @items << Model::NavigationItem.new(
+          caption: caption.to_s,
+          action:,
+          target: target.to_s
+        )
       end
     end
 

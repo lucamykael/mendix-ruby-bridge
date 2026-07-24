@@ -123,6 +123,44 @@ module MendixBridge
       end
     end
 
+    NavigationItem = Data.define(:caption, :action, :target) do
+      def to_h
+        { caption:, action:, target: }
+      end
+    end
+
+    NavigationMenu = Data.define(:caption, :items) do
+      def to_h
+        { caption:, items: items.map(&:to_h) }
+      end
+    end
+
+    RoleHomePage = Data.define(:role, :page) do
+      def to_h
+        { role:, page: }
+      end
+    end
+
+    NavigationProfile = Data.define(
+      :name,
+      :home_page,
+      :role_home_pages,
+      :login_page,
+      :not_found_page,
+      :items
+    ) do
+      def to_h
+        {
+          name:,
+          home_page:,
+          role_home_pages: role_home_pages.map(&:to_h),
+          login_page:,
+          not_found_page:,
+          items: items.map(&:to_h)
+        }.compact
+      end
+    end
+
     AppModule = Data.define(
       :name,
       :entities,
@@ -143,14 +181,22 @@ module MendixBridge
       end
     end
 
-    App = Data.define(:name, :version, :modules, :user_roles, :project_security) do
+    App = Data.define(
+      :name,
+      :version,
+      :modules,
+      :user_roles,
+      :project_security,
+      :navigation_profiles
+    ) do
       def to_h
         {
           schema_version: 1,
           app: { name:, version: }.compact,
           modules: modules.map(&:to_h),
           user_roles: user_roles.map(&:to_h),
-          project_security: project_security&.to_h
+          project_security: project_security&.to_h,
+          navigation_profiles: navigation_profiles.map(&:to_h)
         }
       end
     end

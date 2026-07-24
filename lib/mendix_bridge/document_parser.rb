@@ -77,9 +77,21 @@ module MendixBridge
       end
 
       def parse_navigation(mdl)
+        default_home = mdl.lines.filter_map do |line|
+          match = line.match(/^\s*home\s+page\s+([\w.]+)(?:\s+for\s+[\w.]+)?/i)
+          match[1] if match && !line.match?(/\s+for\s+[\w.]+/i)
+        end.first
         {
           "kind" => mdl[/^--\s*Kind:\s*(.+)$/i, 1]&.strip,
-          "home_page" => mdl[/^\s*home\s+page\s+([\w.]+)/i, 1],
+          "home_page" => default_home,
+          "role_home_pages" => mdl.scan(
+            /^\s*home\s+page\s+([\w.]+)\s+for\s+([\w.]+)/i
+          ).map { |page, role| { "role" => role, "page" => page } },
+          "login_page" => mdl[/^\s*login\s+page\s+([\w.]+)/i, 1],
+          "not_found_page" => mdl[/^\s*not\s+found\s+page\s+([\w.]+)/i, 1],
+          "menu_groups" => mdl.scan(
+            /^\s*menu\s+'((?:''|[^'])+)'\s*\(/i
+          ).flatten.map { |caption| caption.gsub("''", "'") },
           "menu_items" => mdl.scan(
             /^\s*menu\s+item\s+'((?:''|[^'])+)'\s+(page|microflow|nanoflow)\s+([\w.]+)\s*;/i
           ).map do |caption, action, target|

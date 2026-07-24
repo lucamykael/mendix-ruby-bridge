@@ -114,6 +114,24 @@ end
 Existing role modifications and implicit access-rule removals remain blocked
 until explicit `ALTER` and `REVOKE` migrations are available.
 
+Navigation profiles support default and role-specific home pages, login and
+not-found pages, direct menu items, and grouped menus:
+
+```ruby
+navigation_profile "Responsive",
+  home_page: "CRM.Home",
+  login_page: "CRM.Login" do
+  home_page "CRM.AdminHome", for_role: "CRM.Admin"
+  menu_item "Home", page: "CRM.Home"
+  menu "Customers" do
+    menu_item "Overview", page: "CRM.Customer_Overview"
+    menu_item "Refresh", nanoflow: "CRM.ACT_Refresh"
+  end
+end
+```
+
+Navigation uses `CREATE OR REPLACE` and participates in semantic plan/apply.
+
 ## Git-controlled Mendix branches
 
 Keep Studio Pro closed during branch transitions and use Git as the source of
