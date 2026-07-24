@@ -270,7 +270,61 @@ class DSLTest < Minitest::Test
     assert_equal "CRM.Validate", details.dig("activities", 1, "target")
     assert_equal ["Result"], details["variables"]
     assert_equal ["CRM.Validate"], details["calls"]
+    assert_equal ["CRM.Validate"], details["microflow_calls"]
     assert_equal ["CRM.User"], details["execute_roles"]
+  end
+
+  def test_parses_nanoflow_and_client_side_calls
+    details = MendixBridge::MicroflowParser.parse(
+      "type" => "nanoflow",
+      "name" => "CRM.ACT_Save",
+      "mdl" => <<~MDL
+        create or modify nanoflow CRM.ACT_Save (
+          $Customer: CRM.Customer
+        )
+        folder 'Nanoflows'
+        begin
+          $Status = call javascript action Native.Save(Customer = $Customer);
+          call nanoflow CRM.SUB_Refresh(Customer = $Customer);
+          return;
+        end;
+        /
+      MDL
+    )
+
+    assert_equal "parsed", details["parse_status"]
+    assert_equal "javascript_action_call", details.dig("activities", 0, "kind")
+    assert_equal "Native.Save", details.dig("activities", 0, "target")
+    assert_equal "nanoflow_call", details.dig("activities", 1, "kind")
+    assert_equal ["Native.Save", "CRM.SUB_Refresh"], details["calls"]
+    assert_equal ["CRM.SUB_Refresh"], details["nanoflow_calls"]
+    assert_equal ["Native.Save"], details["javascript_action_calls"]
+  end
+
+  def test_parses_enumeration_values_and_folder
+    details = MendixBridge::EnumerationParser.parse(
+      "type" => "enumeration",
+      "name" => "CRM.CustomerStatus",
+      "mdl" => <<~MDL
+        create or modify enumeration CRM.CustomerStatus (
+          Active 'Active',
+          Waiting 'Waiting for customer',
+          Customer_s_choice 'Customer''s choice'
+        ) FOLDER 'Domain/Enums';
+        /
+      MDL
+    )
+
+    assert_equal "parsed", details["parse_status"]
+    assert_equal "Domain/Enums", details["folder"]
+    assert_equal(
+      [
+        { "name" => "Active", "caption" => "Active" },
+        { "name" => "Waiting", "caption" => "Waiting for customer" },
+        { "name" => "Customer_s_choice", "caption" => "Customer's choice" }
+      ],
+      details["values"]
+    )
   end
 
   def test_parses_page_settings_widgets_data_and_actions

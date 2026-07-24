@@ -124,11 +124,13 @@ Entity details include persistence, generalization, attributes, types,
 required/default values, and the original MDL. Association details include
 source, target, reference type, owner, storage, delete behavior, and original
 MDL. Microflow details include parameters, return type, folder, activities,
-called microflows, execute roles, and original MDL. Generated files live under
-`generated/modules/` and `generated/microflows/`. Page details include title,
-layout, parameters, widgets, data sources, attributes, actions, linked
-microflows/pages, view roles, and original MDL; generated page files live under
-`generated/pages/`.
+called microflows, execute roles, and original MDL. Nanoflow details additionally
+identify calls to nanoflows and JavaScript actions. Enumeration details include
+their values, captions, and folder. Generated files live under
+`generated/modules/`, `generated/microflows/`, `generated/nanoflows/`, and
+`generated/enumerations/`. Page details include title, layout, parameters,
+widgets, data sources, attributes, actions, linked microflows/pages, view roles,
+and original MDL; generated page files live under `generated/pages/`.
 
 Security details include project settings, user-role to module-role mappings,
 role-management permissions, module-role membership, and entity access rules

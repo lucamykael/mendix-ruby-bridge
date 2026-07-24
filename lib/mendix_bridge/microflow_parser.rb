@@ -6,20 +6,26 @@ module MendixBridge
       def parse(description)
         mdl = description.fetch("mdl")
         header = mdl.match(
-          /\bmicroflow\s+(?<name>[\w.]+)\s*\((?<parameters>.*?)\)\s*(?:returns\s+(?<returns>\S+))?/im
+          /\b(?:microflow|nanoflow)\s+(?<name>[\w.]+)\s*\((?<parameters>.*?)\)\s*(?:returns\s+(?<returns>\S+))?/im
         )
         body = mdl[/\nbegin\s*\n(?<body>.*)\nend;\s*(?:\n|$)/m, :body]
 
         return { "mdl" => mdl, "parse_status" => "unsupported" } unless header && body
 
         activities = parse_activities(body)
+        microflow_calls = calls(mdl, "microflow")
+        nanoflow_calls = calls(mdl, "nanoflow")
+        javascript_action_calls = calls(mdl, "javascript action")
         {
           "parameters" => parse_parameters(header[:parameters]),
           "return_type" => header[:returns],
           "folder" => mdl[/^folder\s+'([^']*)'/i, 1],
           "variables" => activities.filter_map { |activity| activity["result_variable"] }.uniq,
           "activities" => activities,
-          "calls" => mdl.scan(/\bcall\s+microflow\s+([\w.]+)/i).flatten.uniq,
+          "calls" => all_calls(mdl),
+          "microflow_calls" => microflow_calls,
+          "nanoflow_calls" => nanoflow_calls,
+          "javascript_action_calls" => javascript_action_calls,
           "execute_roles" => mdl.scan(
             /^grant\s+execute\s+on\s+microflow\s+[\w.]+\s+to\s+([\w.]+)/i
           ).flatten,
@@ -29,6 +35,16 @@ module MendixBridge
       end
 
       private
+
+      def calls(mdl, kind)
+        mdl.scan(/\bcall\s+#{Regexp.escape(kind)}\s+([\w.]+)/i).flatten.uniq
+      end
+
+      def all_calls(mdl)
+        mdl.scan(
+          /\bcall\s+(?:microflow|nanoflow|javascript\s+action)\s+([\w.]+)/i
+        ).flatten.uniq
+      end
 
       def parse_parameters(source)
         source.lines.filter_map do |line|
@@ -67,6 +83,8 @@ module MendixBridge
       def activity_kind(statement)
         case statement
         when /\A(?:\$\w+\s*=\s*)?call\s+microflow\b/i then "microflow_call"
+        when /\A(?:\$\w+\s*=\s*)?call\s+nanoflow\b/i then "nanoflow_call"
+        when /\A(?:\$\w+\s*=\s*)?call\s+javascript\s+action\b/i then "javascript_action_call"
         when /\Aretrieve\b/i then "retrieve"
         when /\Achange\b/i then "change"
         when /\Adelete\b/i then "delete"
@@ -81,9 +99,14 @@ module MendixBridge
 
       def activity_metadata(kind, statement)
         case kind
-        when "microflow_call"
+        when "microflow_call", "nanoflow_call", "javascript_action_call"
+          call_kind = {
+            "microflow_call" => "microflow",
+            "nanoflow_call" => "nanoflow",
+            "javascript_action_call" => "javascript action"
+          }.fetch(kind)
           {
-            "target" => statement[/\bcall\s+microflow\s+([\w.]+)/i, 1],
+            "target" => statement[/\bcall\s+#{Regexp.escape(call_kind)}\s+([\w.]+)/i, 1],
             "result_variable" => statement[/\A\$(\w+)\s*=/, 1]
           }.compact
         when "retrieve"
