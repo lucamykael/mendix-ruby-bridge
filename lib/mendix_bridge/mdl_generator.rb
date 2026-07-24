@@ -22,6 +22,10 @@ module MendixBridge
       new(nil).send(:microflow_statement, app_module, microflow)
     end
 
+    def self.page_statement(app_module, page)
+      new(nil).send(:page_statement, app_module, page)
+    end
+
     def initialize(model, skip_associations: [])
       @model = model
       @skip_associations = skip_associations
@@ -35,6 +39,7 @@ module MendixBridge
         microflows = app_module.microflows.map do |microflow|
           microflow_statement(app_module, microflow)
         end
+        pages = app_module.pages.map { |page| page_statement(app_module, page) }
         entities = app_module.entities.map { |entity| entity_statement(app_module, entity) }
         associations = app_module.entities.flat_map do |entity|
           entity.associations.map do |association|
@@ -46,7 +51,7 @@ module MendixBridge
           end.compact
         end
 
-        enumerations + entities + associations + microflows
+        enumerations + entities + associations + microflows + pages
       end
 
       statements.join("\n\n") << "\n"
@@ -85,6 +90,30 @@ module MendixBridge
         "#{parameters.join(",\n")}\n" \
         ")#{returns}#{folder}\n" \
         "BEGIN\n#{body}\nEND;"
+      grants.empty? ? statement : "#{statement}\n\n#{grants.join("\n")}"
+    end
+
+    def page_statement(app_module, page)
+      name = qualified(app_module.name, page.name)
+      settings = [
+        "Title: '#{escape_string(page.title)}'",
+        "Layout: #{qualified_reference(page.layout)}"
+      ]
+      settings << "Folder: '#{escape_string(page.folder)}'" if page.folder
+      unless page.parameters.empty?
+        parameters = page.parameters.map do |parameter|
+          "$#{identifier(parameter.name)}: #{qualified_reference(parameter.type)}"
+        end
+        settings << "Params: { #{parameters.join(', ')} }"
+      end
+      content = page.content.lines.map { |line| "  #{line.rstrip}" }.join("\n")
+      grants = page.view_roles.map do |role|
+        "GRANT VIEW ON PAGE #{name} TO #{qualified_reference(role)};"
+      end
+
+      statement = "CREATE OR MODIFY PAGE #{name} (\n" \
+        "  #{settings.join(",\n  ")}\n" \
+        ") {\n#{content}\n}"
       grants.empty? ? statement : "#{statement}\n\n#{grants.join("\n")}"
     end
 

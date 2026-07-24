@@ -203,6 +203,41 @@ class DSLTest < Minitest::Test
     assert_equal ["CRM.SUB_Validate"], operation.changes["calls"]
   end
 
+  def test_builds_generates_and_plans_pages
+    model = MendixBridge.app("Example") do
+      modulo "CRM" do
+        page "Customer_Edit",
+          title: "Edit Customer",
+          layout: "Atlas_Core.PopupLayout",
+          folder: "Customers" do
+          parameter "Customer", "CRM.Customer"
+          content <<~MDL
+            dataview dataView1 (DataSource: $Customer) {
+              textbox nameBox (Attribute: Name)
+              actionbutton saveButton (Action: microflow CRM.ACT_Save)
+            }
+          MDL
+          view_role "CRM.User"
+        end
+      end
+    end
+
+    mdl = MendixBridge.compile(model, format: :mdl)
+    assert_includes mdl, "CREATE OR MODIFY PAGE CRM.Customer_Edit"
+    assert_includes mdl, "Title: 'Edit Customer'"
+    assert_includes mdl, "Layout: Atlas_Core.PopupLayout"
+    assert_includes mdl, "Params: { $Customer: CRM.Customer }"
+    assert_includes mdl, "GRANT VIEW ON PAGE CRM.Customer_Edit TO CRM.User;"
+
+    inventory = MendixBridge::Inventory.new(
+      [{ "label" => "CRM", "type" => "module", "qualifiedName" => "CRM" }]
+    )
+    operation = MendixBridge::ChangePlanner.plan(model, inventory).operations.first
+    assert_equal "create", operation.action
+    assert_equal "page", operation.type
+    assert_equal ["CRM.ACT_Save"], operation.changes["microflow_calls"]
+  end
+
   def test_can_skip_an_existing_association
     model = MendixBridge.app("Example") do
       modulo "CRM" do

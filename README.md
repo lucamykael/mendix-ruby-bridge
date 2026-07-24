@@ -70,6 +70,27 @@ end
 
 The planner compares parsed flow semantics before applying changes.
 
+Pages support title, layout, folder, typed parameters, widget MDL, and view
+roles:
+
+```ruby
+page "Customer_Edit",
+  title: "Edit Customer",
+  layout: "Atlas_Core.PopupLayout",
+  folder: "Customers" do
+  parameter "Customer", "CRM.Customer"
+  content <<~MDL
+    dataview dataView1 (DataSource: $Customer) {
+      textbox nameBox (Attribute: Name)
+      actionbutton saveButton (Action: microflow CRM.ACT_Save)
+    }
+  MDL
+  view_role "CRM.User"
+end
+```
+
+Page changes are compared through the same semantic parser used by imports.
+
 ## Git-controlled Mendix branches
 
 Keep Studio Pro closed during branch transitions and use Git as the source of

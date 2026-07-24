@@ -42,7 +42,7 @@ module MendixBridge
     def plan
       operations = @model.modules.flat_map { |app_module| plan_module(app_module) }
       declared = operations.map { |operation| "#{operation.type}:#{operation.name}" }.to_set
-      managed_types = %w[entity association enumeration microflow]
+      managed_types = %w[entity association enumeration microflow page]
       preserved = @inventory.elements.count do |element|
         managed_types.include?(element.type) &&
           !declared.include?("#{element.type}:#{element.qualified_name}")
@@ -72,12 +72,60 @@ module MendixBridge
       microflow_operations = app_module.microflows.map do |microflow|
         plan_microflow(app_module, microflow)
       end
+      page_operations = app_module.pages.map do |page|
+        plan_page(app_module, page)
+      end
       entity_operations = app_module.entities.flat_map do |entity|
         [plan_entity(app_module, entity), *entity.associations.map do |association|
           plan_association(app_module, entity, association)
         end]
       end
-      enumeration_operations + entity_operations + microflow_operations
+      enumeration_operations + entity_operations + microflow_operations + page_operations
+    end
+
+    def plan_page(app_module, page)
+      name = "#{app_module.name}.#{page.name}"
+      existing = @inventory.find(name)
+      desired = PageParser.parse(
+        "mdl" => MDLGenerator.page_statement(app_module, page)
+      )
+      comparable_keys = %w[
+        title layout folder parameters widgets data_sources actions
+        microflow_calls nanoflow_calls page_links attributes view_roles
+      ]
+      desired = desired.slice(*comparable_keys)
+
+      return Operation.new(
+        action: "create",
+        type: "page",
+        name:,
+        changes: desired,
+        reason: nil
+      ) unless existing
+
+      details = existing.details
+      unless existing.type == "page" && details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "page",
+          name:,
+          changes: nil,
+          reason: "existing page does not have parsed semantic details"
+        )
+      end
+
+      current = details.slice(*comparable_keys)
+      if current == desired
+        Operation.new(action: "keep", type: "page", name:, changes: nil, reason: nil)
+      else
+        Operation.new(
+          action: "modify",
+          type: "page",
+          name:,
+          changes: { "from" => current, "to" => desired },
+          reason: nil
+        )
+      end
     end
 
     def plan_microflow(app_module, microflow)

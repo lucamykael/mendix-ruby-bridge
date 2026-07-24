@@ -71,6 +71,7 @@ module MendixBridge
         @entities = []
         @enumerations = []
         @microflows = []
+        @pages = []
       end
 
       def entity(name, persistable: true, &block)
@@ -102,12 +103,79 @@ module MendixBridge
         )
       end
 
+      def page(name, title:, layout:, folder: nil, &block)
+        raise ArgumentError, "duplicate page: #{name}" if
+          @pages.any? { |page| page.name == name.to_s }
+
+        @pages << PageBuilder.build(
+          name,
+          title:,
+          layout:,
+          folder:,
+          &block
+        )
+      end
+
       def result
         Model::AppModule.new(
           name: @name,
           entities: @entities,
           enumerations: @enumerations,
-          microflows: @microflows
+          microflows: @microflows,
+          pages: @pages
+        )
+      end
+    end
+
+    class PageBuilder
+      def self.build(name, title:, layout:, folder: nil, &block)
+        builder = new(name, title, layout, folder)
+        builder.instance_eval(&block) if block
+        builder.result
+      end
+
+      def initialize(name, title, layout, folder)
+        @name = name.to_s
+        @title = title.to_s
+        @layout = layout.to_s
+        @folder = folder&.to_s
+        @parameters = []
+        @content = nil
+        @view_roles = []
+      end
+
+      def parameter(name, type)
+        if @parameters.any? { |parameter| parameter.name == name.to_s }
+          raise ArgumentError, "duplicate page parameter: #{name}"
+        end
+
+        @parameters << Model::FlowParameter.new(name: name.to_s, type: type.to_s)
+      end
+
+      def content(source)
+        raise ArgumentError, "page content is already declared" if @content
+
+        @content = source.to_s.strip
+      end
+
+      def view_role(role)
+        role = role.to_s
+        raise ArgumentError, "duplicate view role: #{role}" if @view_roles.include?(role)
+
+        @view_roles << role
+      end
+
+      def result
+        raise ArgumentError, "page #{@name} requires content" if @content.nil? || @content.empty?
+
+        Model::Page.new(
+          name: @name,
+          title: @title,
+          layout: @layout,
+          folder: @folder,
+          parameters: @parameters,
+          content: @content,
+          view_roles: @view_roles
         )
       end
     end
