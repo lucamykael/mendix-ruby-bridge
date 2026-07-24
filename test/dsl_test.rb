@@ -228,6 +228,43 @@ class DSLTest < Minitest::Test
       "ALTER USER ROLE Support (CRM.Support, CRM.Admin) MANAGE ALL ROLES;"
   end
 
+  def test_builds_module_association_and_retype_migrations
+    migration = MendixBridge.migration("restructure-sales") do
+      create_module "Sales"
+      alter_association "CRM.Order_Customer",
+        from: "CRM.Order", to: "CRM.Customer", type: :ReferenceSet, owner: :Both
+      retype_attribute "CRM.Order", "Total", to: "Decimal(12,2)"
+    end
+
+    mdl = MendixBridge::Migration::Generator.mdl(migration)
+    assert_includes mdl, "CREATE MODULE Sales;"
+    assert_includes mdl, "CREATE OR MODIFY ASSOCIATION CRM.Order_Customer"
+    assert_includes mdl, "FROM CRM.Order TO CRM.Customer"
+    assert_includes mdl, "TYPE ReferenceSet"
+    assert_includes mdl, "OWNER Both"
+    assert_includes mdl, "ALTER ENTITY CRM.Order DROP ATTRIBUTE Total;"
+    assert_includes mdl, "ALTER ENTITY CRM.Order ADD ATTRIBUTE Total: Decimal(12,2);"
+  end
+
+  def test_rejects_invalid_association_and_retype_arguments
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") do
+        alter_association "CRM.A", from: "CRM.B", to: "CRM.C", type: :ManyToMany
+      end
+    end
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") do
+        alter_association "CRM.A", from: "CRM.B", to: "CRM.C", type: :Reference, owner: :Nobody
+      end
+    end
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") { retype_attribute "CRM.Order", "Total", to: "" }
+    end
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") { create_module "Bad Name" }
+    end
+  end
+
   def test_rejects_invalid_role_alterations
     assert_raises(ArgumentError) do
       MendixBridge.migration("bad") { alter_module_role "CRM.Support", description: "" }

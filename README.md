@@ -87,9 +87,18 @@ MendixBridge.migration("remove-legacy-customer-data") do
   revoke_access "CRM.Client", role: "CRM.LegacyUser"
   alter_module_role "CRM.Support", description: "Customer support"
   alter_user_role "Support", module_roles: ["CRM.Support", "CRM.Admin"]
+  create_module "Archive"
+  alter_association "CRM.Order_Customer",
+    from: "CRM.Order", to: "CRM.Customer", type: :ReferenceSet, owner: :Both
+  retype_attribute "CRM.Order", "Total", to: "Decimal(12,2)"
   drop :microflow, "CRM.ACT_Legacy"
 end
 ```
+
+`alter_association` re-declares the association in place (`CREATE OR MODIFY`
+preserves its UUID). `retype_attribute` is destructive by nature: MDL has no
+in-place type change, so it drops and re-adds the attribute, discarding the
+column's data — which is exactly why it lives in an explicit migration.
 
 Altering an existing user or module role is a security change, so it also lives
 in a migration rather than the declarative apply, which blocks it on purpose.
