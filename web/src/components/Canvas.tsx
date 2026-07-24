@@ -3,10 +3,10 @@ import { ReactFlow, Background, Controls, MiniMap } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { Assoc } from "../model/er";
 import { erGraph } from "../model/er";
-import { flowGraph } from "../model/flow";
 import type { ElementDetail } from "../model/types";
 import type { Selection } from "./Tree";
 import PageView from "./PageView";
+import FlowCanvas from "./FlowCanvas";
 
 interface Props {
   selection: Selection;
@@ -16,39 +16,42 @@ interface Props {
 }
 
 /**
- * The interactive canvas. Nodes are draggable (React Flow default), which is the
- * foundation for the block-editing / drag-and-drop workflow. For entities,
- * clicking a neighbour navigates to it.
+ * The interactive canvas. Chooses a view by element type:
+ * - microflow/nanoflow -> editable flowchart (draggable, save layout)
+ * - entity             -> domain ER neighbourhood (clickable navigation)
+ * - page               -> layout preview
  */
 export default function Canvas({ selection, details, assocs, onSelect }: Props) {
   const { type, qn } = selection;
   const detail = details[qn];
 
-  const graph = useMemo(() => {
-    if ((type === "microflow" || type === "nanoflow") && detail?.mdl) return flowGraph(detail.mdl);
-    if (type === "entity") return erGraph(qn, details, assocs);
-    return null;
-  }, [type, qn, detail, details, assocs]);
+  const er = useMemo(
+    () => (type === "entity" ? erGraph(qn, details, assocs) : null),
+    [type, qn, details, assocs],
+  );
 
   if (type === "page" && detail) return <PageView selection={selection} detail={detail} onSelect={onSelect} />;
-  if (!graph) return null;
+  if ((type === "microflow" || type === "nanoflow") && detail?.mdl) return <FlowCanvas qn={qn} mdl={detail.mdl} />;
 
-  return (
-    <div className="canvas">
-      <ReactFlow
-        nodes={graph.nodes}
-        edges={graph.edges}
-        fitView
-        minZoom={0.15}
-        proOptions={{ hideAttribution: true }}
-        onNodeClick={(_, node) => {
-          if (type === "entity" && node.id !== qn) onSelect(node.id);
-        }}
-      >
-        <Background color="#2a3547" gap={18} />
-        <MiniMap pannable zoomable maskColor="rgba(15,20,32,0.7)" nodeColor="#3a5ea8" />
-        <Controls showInteractive={false} />
-      </ReactFlow>
-    </div>
-  );
+  if (er) {
+    return (
+      <div className="canvas">
+        <ReactFlow
+          nodes={er.nodes}
+          edges={er.edges}
+          fitView
+          minZoom={0.15}
+          proOptions={{ hideAttribution: true }}
+          onNodeClick={(_, node) => {
+            if (node.id !== qn) onSelect(node.id);
+          }}
+        >
+          <Background color="#2a3547" gap={18} />
+          <MiniMap pannable zoomable maskColor="rgba(15,20,32,0.7)" nodeColor="#3a5ea8" />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+      </div>
+    );
+  }
+  return null;
 }
