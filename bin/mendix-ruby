@@ -195,6 +195,45 @@ when "inspect"
   else
     puts MendixBridge::Presenter.text(element)
   end
+when "plan"
+  options = { json: false }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby plan APP.rb --inventory IMPORTED_DIR [--json]"
+    opts.on("-i", "--inventory DIR", "Imported Mendix Ruby project") do |dir|
+      options[:inventory] = File.expand_path(dir)
+    end
+    opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
+  end
+  parser.parse!
+  dsl_file = ARGV.shift
+  unless dsl_file && options[:inventory] && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  snapshot_file = File.join(options.fetch(:inventory), "inventory", "project-tree.json")
+  abort "Not an imported Mendix Ruby project: #{options.fetch(:inventory)}" unless
+    File.file?(snapshot_file)
+
+  model = MendixBridge.load_file(File.expand_path(dsl_file))
+  inventory = MendixBridge::Inventory.load(snapshot_file)
+  plan = MendixBridge::ChangePlanner.plan(model, inventory)
+
+  if options[:json]
+    puts JSON.pretty_generate(plan.to_h)
+  else
+    plan.operations.each do |operation|
+      puts "#{operation.action.upcase}\t#{operation.type}\t#{operation.name}"
+      puts "  Reason: #{operation.reason}" if operation.reason
+      if operation.changes
+        JSON.pretty_generate(operation.changes).each_line { |line| puts "  #{line}" }
+      end
+    end
+    puts "Preserved undeclared entities/associations: #{plan.preserved_undeclared}"
+    puts "Summary: #{plan.counts.map { |action, count| "#{action}=#{count}" }.join(', ')}"
+  end
+
+  exit 2 if plan.blocked?
 when "view"
   options = {}
   parser = OptionParser.new do |opts|
@@ -226,6 +265,7 @@ else
       mendix-ruby refresh [IMPORTED_DIR]
       mendix-ruby search QUERY [IMPORTED_DIR] [--type TYPE] [--json]
       mendix-ruby inspect ELEMENT [IMPORTED_DIR] [--type TYPE] [--json|--mdl]
+      mendix-ruby plan APP.rb --inventory IMPORTED_DIR [--json]
       mendix-ruby view [IMPORTED_DIR] [-o OUTPUT.html]
   USAGE
   exit 1

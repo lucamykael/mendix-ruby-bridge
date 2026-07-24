@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "set"
 require_relative "mendix_bridge/model"
 require_relative "mendix_bridge/dsl"
 require_relative "mendix_bridge/mdl_generator"
@@ -13,6 +14,7 @@ require_relative "mendix_bridge/security_parser"
 require_relative "mendix_bridge/ruby_inventory_generator"
 require_relative "mendix_bridge/snapshot_diff"
 require_relative "mendix_bridge/presenter"
+require_relative "mendix_bridge/change_planner"
 require_relative "mendix_bridge/importer"
 require_relative "mendix_bridge/html_viewer"
 
