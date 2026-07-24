@@ -17,6 +17,7 @@ require_relative "mendix_bridge/presenter"
 require_relative "mendix_bridge/change_planner"
 require_relative "mendix_bridge/importer"
 require_relative "mendix_bridge/html_viewer"
+require_relative "mendix_bridge/git_workflow"
 
 module MendixBridge
   class << self

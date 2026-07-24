@@ -41,6 +41,35 @@ The target modules must already exist in the Mendix project. An association
 declared inside an entity represents a reference from that entity to its target:
 `:one` generates `Reference`, while `:many` generates `ReferenceSet`.
 
+## Git-controlled Mendix branches
+
+Keep Studio Pro closed during branch transitions and use Git as the source of
+truth. When `bin/` is on `PATH`, Git discovers `git-mendix` as a subcommand.
+Run these from the Mendix project directory (the single `.mpr` is detected):
+
+```sh
+git mendix status
+
+git mendix branches --fetch
+
+git mendix new feature/customer-import \
+  --inventory ../ruby-bridge-sandbox-inventory \
+  --studio-closed
+
+git mendix switch main \
+  --inventory ../ruby-bridge-sandbox-inventory \
+  --studio-closed
+```
+
+Use `mendix-git` directly when `git-mendix` is not installed on `PATH`, and
+pass `--project APP.mpr` when running outside the project directory.
+
+`switch` and `new` refuse dirty working trees and in-progress Git operations.
+They require explicit confirmation that Studio Pro is closed, run the official
+Mendix consistency check after switching, and refresh the Ruby inventory when
+`--inventory` is provided. If validation fails, the command attempts to return
+to the previous branch.
+
 ## Import an existing Mendix project
 
 Create a read-only Ruby inventory from an existing `.mpr`:
