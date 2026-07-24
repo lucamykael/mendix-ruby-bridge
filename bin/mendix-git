@@ -1,0 +1,68 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require "optparse"
+require_relative "../lib/mendix_bridge"
+
+options = { studio_closed: false, fetch: false }
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: mendix-git COMMAND [BRANCH] --project APP.mpr [options]"
+  opts.on("-p", "--project FILE", "Mendix .mpr file") { |file| options[:project] = File.expand_path(file) }
+  opts.on("-i", "--inventory DIR", "Refresh this Ruby inventory after switching") do |dir|
+    options[:inventory] = File.expand_path(dir)
+  end
+  opts.on("--studio-closed", "Confirm Studio Pro is closed") { options[:studio_closed] = true }
+  opts.on("--fetch", "Fetch and prune origin before the command") { options[:fetch] = true }
+  opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
+end
+
+parser.parse!
+command = ARGV.shift
+branch = ARGV.shift
+unless options[:project]
+  candidates = Dir[File.join(Dir.pwd, "*.mpr")]
+  options[:project] = candidates.first if candidates.length == 1
+end
+unless command && options[:project] && ARGV.empty?
+  warn parser
+  warn "Run inside a directory containing one .mpr file or pass --project."
+  exit 1
+end
+
+bridge_dir = File.expand_path("..", __dir__)
+begin
+workflow = MendixBridge::GitWorkflow.new(
+  options.fetch(:project),
+  inventory_dir: options[:inventory],
+  mxcli: File.join(bridge_dir, "bin", "mxcli")
+)
+workflow.fetch if options[:fetch]
+
+result = case command
+when "status"
+  abort "status does not accept a branch" if branch
+  workflow.status
+when "branches"
+  abort "branches does not accept a branch" if branch
+  workflow.branches
+when "switch"
+  abort "switch requires a branch" unless branch
+  workflow.switch(branch, studio_closed: options[:studio_closed])
+when "new"
+  abort "new requires a branch" unless branch
+  workflow.create(branch, studio_closed: options[:studio_closed])
+else
+  abort "unknown command: #{command}; expected status, branches, switch, or new"
+end
+
+if options[:json]
+  puts JSON.pretty_generate(result)
+elsif result.is_a?(Array)
+  puts result
+else
+  result.each { |key, value| puts "#{key}: #{value}" }
+end
+rescue MendixBridge::GitWorkflowError => error
+  abort error.message
+end

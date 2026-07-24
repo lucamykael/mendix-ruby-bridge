@@ -5,7 +5,7 @@ Gem::Specification.new do |spec|
   spec.authors = ["Mykael"]
   spec.files = Dir["lib/**/*.rb"]
   spec.bindir = "bin"
-  spec.executables = ["mendix-ruby"]
+  spec.executables = ["mendix-ruby", "mendix-git", "git-mendix", "mendix-apply"]
   spec.require_paths = ["lib"]
   spec.required_ruby_version = ">= 3.2"
 
