@@ -54,6 +54,22 @@ Enumeration creation and safe modifications participate in `plan` and `apply`.
 Removing an existing value remains blocked until explicit migration support is
 available.
 
+Microflows support typed parameters, return types, folders, executable body
+statements, and execute roles:
+
+```ruby
+microflow "ACT_Save", returns: "Boolean", folder: "Actions" do
+  parameter "Customer", "CRM.Customer"
+  body <<~MDL
+    $Valid = call microflow CRM.SUB_Validate(Customer = $Customer);
+    return $Valid;
+  MDL
+  execute_role "CRM.User"
+end
+```
+
+The planner compares parsed flow semantics before applying changes.
+
 ## Git-controlled Mendix branches
 
 Keep Studio Pro closed during branch transitions and use Git as the source of

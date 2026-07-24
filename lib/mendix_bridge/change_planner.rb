@@ -42,7 +42,7 @@ module MendixBridge
     def plan
       operations = @model.modules.flat_map { |app_module| plan_module(app_module) }
       declared = operations.map { |operation| "#{operation.type}:#{operation.name}" }.to_set
-      managed_types = %w[entity association enumeration]
+      managed_types = %w[entity association enumeration microflow]
       preserved = @inventory.elements.count do |element|
         managed_types.include?(element.type) &&
           !declared.include?("#{element.type}:#{element.qualified_name}")
@@ -69,12 +69,59 @@ module MendixBridge
       enumeration_operations = app_module.enumerations.map do |enumeration|
         plan_enumeration(app_module, enumeration)
       end
+      microflow_operations = app_module.microflows.map do |microflow|
+        plan_microflow(app_module, microflow)
+      end
       entity_operations = app_module.entities.flat_map do |entity|
         [plan_entity(app_module, entity), *entity.associations.map do |association|
           plan_association(app_module, entity, association)
         end]
       end
-      enumeration_operations + entity_operations
+      enumeration_operations + entity_operations + microflow_operations
+    end
+
+    def plan_microflow(app_module, microflow)
+      name = "#{app_module.name}.#{microflow.name}"
+      existing = @inventory.find(name)
+      desired = MicroflowParser.parse(
+        "mdl" => MDLGenerator.microflow_statement(app_module, microflow)
+      )
+      comparable_keys = %w[
+        parameters return_type folder activities calls execute_roles
+      ]
+      desired = desired.slice(*comparable_keys)
+
+      return Operation.new(
+        action: "create",
+        type: "microflow",
+        name:,
+        changes: desired,
+        reason: nil
+      ) unless existing
+
+      details = existing.details
+      unless existing.type == "microflow" && details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "microflow",
+          name:,
+          changes: nil,
+          reason: "existing microflow does not have parsed semantic details"
+        )
+      end
+
+      current = details.slice(*comparable_keys)
+      if current == desired
+        Operation.new(action: "keep", type: "microflow", name:, changes: nil, reason: nil)
+      else
+        Operation.new(
+          action: "modify",
+          type: "microflow",
+          name:,
+          changes: { "from" => current, "to" => desired },
+          reason: nil
+        )
+      end
     end
 
     def plan_enumeration(app_module, enumeration)

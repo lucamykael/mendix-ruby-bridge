@@ -167,6 +167,42 @@ class DSLTest < Minitest::Test
     end
   end
 
+  def test_builds_generates_and_plans_microflows
+    model = MendixBridge.app("Example") do
+      modulo "CRM" do
+        microflow "ACT_Save", returns: "Boolean", folder: "Actions" do
+          parameter "Customer", "CRM.Customer"
+          body <<~MDL
+            $Valid = call microflow CRM.SUB_Validate(Customer = $Customer);
+            return $Valid;
+          MDL
+          execute_role "CRM.User"
+        end
+      end
+    end
+
+    mdl = MendixBridge.compile(model, format: :mdl)
+    assert_includes mdl, "CREATE OR MODIFY MICROFLOW CRM.ACT_Save"
+    assert_includes mdl, "$Customer: CRM.Customer"
+    assert_includes mdl, "RETURNS Boolean"
+    assert_includes mdl, "FOLDER 'Actions'"
+    assert_includes mdl, "GRANT EXECUTE ON MICROFLOW CRM.ACT_Save TO CRM.User;"
+
+    inventory = MendixBridge::Inventory.new(
+      [
+        {
+          "label" => "CRM",
+          "type" => "module",
+          "qualifiedName" => "CRM"
+        }
+      ]
+    )
+    operation = MendixBridge::ChangePlanner.plan(model, inventory).operations.first
+    assert_equal "create", operation.action
+    assert_equal "microflow", operation.type
+    assert_equal ["CRM.SUB_Validate"], operation.changes["calls"]
+  end
+
   def test_can_skip_an_existing_association
     model = MendixBridge.app("Example") do
       modulo "CRM" do
