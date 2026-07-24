@@ -29,13 +29,21 @@ Apply a DSL file with all safety checks:
 
 ```sh
 bin/mendix-apply examples/sandbox_app.rb \
-  --project ../mendix-ruby-sandbox/RubyBridgeSandbox.mpr
+  --project ../mendix-ruby-sandbox/RubyBridgeSandbox.mpr \
+  --inventory ../ruby-bridge-sandbox-inventory \
+  --yes
 ```
 
 The target project must be in a clean Git repository and contain a
 `.mendix-version` file matching the installed MxBuild version. The command
 validates the generated MDL, applies it with the pinned `mxcli`, and runs the
 official `mx check` afterward.
+
+Before writing, it refreshes the inventory, verifies that the inventory belongs
+to the target `.mpr`, prints the change plan, refuses blocked operations, and
+requires `--yes` when the plan contains applicable changes. After a successful
+write it refreshes the inventory again. A plan containing only `KEEP` exits
+without touching the Mendix project and does not require `--yes`.
 
 The target modules must already exist in the Mendix project. An association
 declared inside an entity represents a reference from that entity to its target:
