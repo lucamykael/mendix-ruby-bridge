@@ -3,12 +3,18 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(tr -d '[:space:]' < "$project_dir/.mxcli-version")"
-executable="$project_dir/.tools/mxcli/$version/mxcli"
+if [[ -n "${MENDIX_RUBY_TOOLS_DIR:-}" ]]; then
+  tools_dir="$MENDIX_RUBY_TOOLS_DIR"
+elif [[ -d "$project_dir/.git" ]]; then
+  tools_dir="$project_dir/.tools"
+else
+  tools_dir="${XDG_DATA_HOME:-$HOME/.local/share}/mendix-ruby-bridge/tools"
+fi
+executable="$tools_dir/mxcli/$version/mxcli"
 
 if [[ ! -x "$executable" ]]; then
-  echo "mxcli $version is not installed. Run: bin/setup-tools" >&2
+  echo "mxcli $version is not installed. Run: mendix-ruby setup" >&2
   exit 1
 fi
 
 exec "$executable" "$@"
-

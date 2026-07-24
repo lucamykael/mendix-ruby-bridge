@@ -1,0 +1,26 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+      - run: bundle exec rake test
+      - name: Verify tag matches gem version
+        run: test "$GITHUB_REF_NAME" = "v$(ruby -Ilib -rmendix_bridge/version -e 'print MendixBridge::VERSION')"
+      - run: mkdir -p pkg && gem build mendix-ruby-bridge.gemspec --output pkg/mendix-ruby-bridge-${GITHUB_REF_NAME#v}.gem
+      - run: gh release create "$GITHUB_REF_NAME" pkg/*.gem --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
