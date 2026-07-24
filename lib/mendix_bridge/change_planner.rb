@@ -41,8 +41,13 @@ module MendixBridge
 
     def plan
       operations = @model.modules.flat_map { |app_module| plan_module(app_module) }
+      operations.concat(@model.user_roles.map { |role| plan_user_role(role) })
+      operations << plan_project_security(@model.project_security) if @model.project_security
       declared = operations.map { |operation| "#{operation.type}:#{operation.name}" }.to_set
-      managed_types = %w[entity association enumeration microflow page]
+      managed_types = %w[
+        entity association enumeration microflow page
+        modulerole userrole projectsecurity
+      ]
       preserved = @inventory.elements.count do |element|
         managed_types.include?(element.type) &&
           !declared.include?("#{element.type}:#{element.qualified_name}")
@@ -75,12 +80,136 @@ module MendixBridge
       page_operations = app_module.pages.map do |page|
         plan_page(app_module, page)
       end
+      module_role_operations = app_module.module_roles.map do |role|
+        plan_module_role(app_module, role)
+      end
       entity_operations = app_module.entities.flat_map do |entity|
         [plan_entity(app_module, entity), *entity.associations.map do |association|
           plan_association(app_module, entity, association)
         end]
       end
-      enumeration_operations + entity_operations + microflow_operations + page_operations
+      module_role_operations + enumeration_operations + entity_operations +
+        microflow_operations + page_operations
+    end
+
+    def plan_module_role(app_module, role)
+      name = "#{app_module.name}.#{role.name}"
+      existing = @inventory.find(name)
+      desired = { "description" => role.description }.compact
+      return Operation.new(
+        action: "create",
+        type: "modulerole",
+        name:,
+        changes: desired,
+        reason: nil
+      ) unless existing
+
+      details = existing.details
+      unless existing.type == "modulerole" && details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "modulerole",
+          name:,
+          changes: nil,
+          reason: "existing module role does not have parsed semantic details"
+        )
+      end
+
+      current = { "description" => details["description"] }.compact
+      return Operation.new(
+        action: "keep",
+        type: "modulerole",
+        name:,
+        changes: nil,
+        reason: nil
+      ) if current == desired
+
+      Operation.new(
+        action: "blocked",
+        type: "modulerole",
+        name:,
+        changes: { "from" => current, "to" => desired },
+        reason: "modifying an existing module role is not supported safely"
+      )
+    end
+
+    def plan_user_role(role)
+      existing = @inventory.find(role.name)
+      desired = {
+        "module_roles" => role.module_roles,
+        "manage_all_roles" => role.manage_all_roles
+      }
+      return Operation.new(
+        action: "create",
+        type: "userrole",
+        name: role.name,
+        changes: desired,
+        reason: nil
+      ) unless existing
+
+      details = existing.details
+      unless existing.type == "userrole" && details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "userrole",
+          name: role.name,
+          changes: nil,
+          reason: "existing user role does not have parsed semantic details"
+        )
+      end
+
+      current = details.slice("module_roles", "manage_all_roles")
+      return Operation.new(
+        action: "keep",
+        type: "userrole",
+        name: role.name,
+        changes: nil,
+        reason: nil
+      ) if current == desired
+
+      Operation.new(
+        action: "blocked",
+        type: "userrole",
+        name: role.name,
+        changes: { "from" => current, "to" => desired },
+        reason: "modifying an existing user role requires explicit ALTER support"
+      )
+    end
+
+    def plan_project_security(security)
+      existing = @inventory.find("ProjectSecurity")
+      desired = {
+        "SecurityLevel" => security.level.capitalize,
+        "DemoUsersEnabled" => security.demo_users
+      }
+      unless existing&.details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "projectsecurity",
+          name: "ProjectSecurity",
+          changes: nil,
+          reason: "project security does not have parsed semantic details"
+        )
+      end
+
+      current = existing.details.fetch("settings").slice(*desired.keys)
+      if current == desired
+        Operation.new(
+          action: "keep",
+          type: "projectsecurity",
+          name: "ProjectSecurity",
+          changes: nil,
+          reason: nil
+        )
+      else
+        Operation.new(
+          action: "modify",
+          type: "projectsecurity",
+          name: "ProjectSecurity",
+          changes: { "from" => current, "to" => desired },
+          reason: nil
+        )
+      end
     end
 
     def plan_page(app_module, page)
@@ -288,6 +417,26 @@ module MendixBridge
       changes["added_attributes"] = added.map { |name| desired.fetch(name) } unless added.empty?
       changes["modified_attributes"] = modified unless modified.empty?
       changes["removed_attributes"] = removed unless removed.empty?
+
+      current_access = details.fetch("access_rules", []).map do |rule|
+        comparable_access_rule(rule)
+      end
+      desired_access = entity.access_rules.map do |rule|
+        comparable_access_rule(rule.to_h.transform_keys(&:to_s))
+      end
+      current_by_role = current_access.to_h { |rule| [rule.fetch("role"), rule] }
+      desired_by_role = desired_access.to_h { |rule| [rule.fetch("role"), rule] }
+      added_roles = desired_by_role.keys - current_by_role.keys
+      removed_roles = current_by_role.keys - desired_by_role.keys
+      modified_roles = (current_by_role.keys & desired_by_role.keys).filter_map do |role|
+        before = current_by_role.fetch(role)
+        after = desired_by_role.fetch(role)
+        { "role" => role, "from" => before, "to" => after } unless before == after
+      end
+      changes["added_access_rules"] =
+        added_roles.map { |role| desired_by_role.fetch(role) } unless added_roles.empty?
+      changes["modified_access_rules"] = modified_roles unless modified_roles.empty?
+      changes["removed_access_rules"] = removed_roles unless removed_roles.empty?
       changes
     end
 
@@ -295,6 +444,9 @@ module MendixBridge
       reasons = []
       if changes["removed_attributes"]&.any?
         reasons << "attribute removal requires explicit destructive-change support"
+      end
+      if changes["removed_access_rules"]&.any?
+        reasons << "entity access removal requires explicit REVOKE support"
       end
       if changes.key?("persistable")
         reasons << "changing entity persistence requires explicit migration support"
@@ -351,6 +503,10 @@ module MendixBridge
         "required" => attribute.required,
         "default" => default_value(attribute.default)
       }.compact
+    end
+
+    def comparable_access_rule(rule)
+      rule.slice("role", "create", "delete", "read", "write", "xpath")
     end
 
     def comparable_attribute(attribute)

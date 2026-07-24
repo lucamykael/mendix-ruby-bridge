@@ -91,6 +91,29 @@ end
 
 Page changes are compared through the same semantic parser used by imports.
 
+Security is declared at application, module, and entity levels:
+
+```ruby
+project_security level: :production, demo_users: false
+user_role "Support", module_roles: ["CRM.Support"]
+
+modulo "CRM" do
+  module_role "Support", description: "Customer support"
+
+  entity "Customer" do
+    attribute "Name", :string
+    access "CRM.Support",
+      create: true,
+      read: :all,
+      write: ["Name"],
+      where: "[Owner = '[%CurrentUser%]']"
+  end
+end
+```
+
+Existing role modifications and implicit access-rule removals remain blocked
+until explicit `ALTER` and `REVOKE` migrations are available.
+
 ## Git-controlled Mendix branches
 
 Keep Studio Pro closed during branch transitions and use Git as the source of

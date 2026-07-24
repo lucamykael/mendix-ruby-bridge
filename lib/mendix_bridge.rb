@@ -33,9 +33,23 @@ module MendixBridge
       serialize(model, format:, pretty:)
     end
 
-    def compile(model, format: :json, pretty: true, skip_associations: [])
+    def compile(
+      model,
+      format: :json,
+      pretty: true,
+      skip_associations: [],
+      skip_module_roles: [],
+      skip_user_roles: []
+    )
       validate!(model)
-      serialize(model, format:, pretty:, skip_associations:)
+      serialize(
+        model,
+        format:,
+        pretty:,
+        skip_associations:,
+        skip_module_roles:,
+        skip_user_roles:
+      )
     end
 
     def validate!(model)
@@ -56,12 +70,24 @@ module MendixBridge
 
     private
 
-    def serialize(model, format:, pretty:, skip_associations: [])
+    def serialize(
+      model,
+      format:,
+      pretty:,
+      skip_associations: [],
+      skip_module_roles: [],
+      skip_user_roles: []
+    )
       case format.to_sym
       when :json
         pretty ? JSON.pretty_generate(model.to_h) : JSON.generate(model.to_h)
       when :mdl
-        MDLGenerator.generate(model, skip_associations:)
+        MDLGenerator.generate(
+          model,
+          skip_associations:,
+          skip_module_roles:,
+          skip_user_roles:
+        )
       else
         raise ArgumentError, "unsupported output format: #{format}"
       end
