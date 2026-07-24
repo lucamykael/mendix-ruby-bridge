@@ -11,6 +11,7 @@ module MendixBridge
     SNAPSHOT_FILE = "inventory/project-tree.json"
     ELEMENT_DETAILS_FILE = "inventory/element-details.json"
     METADATA_FILE = "mendix-project.json"
+    DEPENDENCIES_FILE = "inventory/dependencies.json"
 
     def initialize(mxcli:)
       @mxcli = File.expand_path(mxcli)
@@ -56,6 +57,10 @@ module MendixBridge
       File.write(
         File.join(output_dir, METADATA_FILE),
         "#{JSON.pretty_generate(metadata(project_file, inventory))}\n"
+      )
+      File.write(
+        File.join(output_dir, DEPENDENCIES_FILE),
+        "#{JSON.pretty_generate(DependencyIndex.new(inventory).to_h)}\n"
       )
       write_once(File.join(output_dir, "Gemfile"), gemfile)
       write_once(File.join(output_dir, "Mendixfile.rb"), mendixfile)

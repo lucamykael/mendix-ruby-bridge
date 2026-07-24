@@ -314,6 +314,23 @@ modified, and removed elements, and writes `changes/latest.json`. It replaces
 only snapshots and files under `generated/`; existing scaffold and manual files
 outside `generated/` are preserved.
 
+Every import also writes `inventory/dependencies.json`. It combines normalized
+semantic references with qualified MDL references and retains only targets that
+exist in the inventory.
+
+Query dependencies, dependents, callers, callees, and downstream impact:
+
+```sh
+bin/mendix-ruby deps CRM.ACT_Save ../ruby-bridge-sandbox-inventory
+bin/mendix-ruby deps CRM.ACT_Save ../ruby-bridge-sandbox-inventory \
+  --direction callees
+bin/mendix-ruby deps CRM.Customer ../ruby-bridge-sandbox-inventory \
+  --direction impact --json
+```
+
+Use `--transitive` to walk the complete graph. Impact is always transitive and
+reports every downstream reference path and kind.
+
 Search and inspect from the terminal:
 
 ```sh
