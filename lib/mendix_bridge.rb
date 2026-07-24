@@ -2,6 +2,7 @@
 
 require "json"
 require "set"
+require_relative "mendix_bridge/version"
 require_relative "mendix_bridge/model"
 require_relative "mendix_bridge/dsl"
 require_relative "mendix_bridge/mdl_generator"

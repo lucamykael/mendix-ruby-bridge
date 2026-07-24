@@ -29,7 +29,7 @@ module MendixBridge
 
       def parse_java_action(mdl)
         header = mdl.match(
-          /\bjava\s+action\s+[\w.]+\s*\((?<parameters>.*?)\)\s*returns\s+(?<returns>[^\s\n]+)/im
+          /\bjava\s+action\s+[\w.]+\s*\((?<parameters>.*?)\)\s*returns\s+(?<returns>\S+)/im
         )
         {
           "parameters" => parse_action_parameters(header&.[](:parameters).to_s),

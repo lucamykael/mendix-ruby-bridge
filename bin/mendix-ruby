@@ -9,6 +9,12 @@ command = ARGV.shift
 project_config = MendixBridge::Config.find
 
 case command
+when "--version", "-v", "version"
+  puts MendixBridge::VERSION
+when "setup"
+  setup = File.expand_path("setup-tools", __dir__)
+  abort "Tool installer is missing: #{setup}" unless File.executable?(setup)
+  exit(system(setup) ? 0 : 1)
 when "configure"
   options = { force: false, path: MendixBridge::Config::FILE_NAME }
   parser = OptionParser.new do |opts|
@@ -505,6 +511,7 @@ when "view"
 else
   warn <<~USAGE
     Usage:
+      mendix-ruby setup
       mendix-ruby configure --project APP.mpr --inventory DIR --model APP.rb
       mendix-ruby deps ELEMENT [IMPORTED_DIR] [options]
       mendix-ruby migrate MIGRATION.rb --project APP.mpr [--dry-run]

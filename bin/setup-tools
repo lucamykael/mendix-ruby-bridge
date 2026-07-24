@@ -3,7 +3,14 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(tr -d '[:space:]' < "$project_dir/.mxcli-version")"
-install_dir="$project_dir/.tools/mxcli/$version"
+if [[ -n "${MENDIX_RUBY_TOOLS_DIR:-}" ]]; then
+  tools_dir="$MENDIX_RUBY_TOOLS_DIR"
+elif [[ -d "$project_dir/.git" ]]; then
+  tools_dir="$project_dir/.tools"
+else
+  tools_dir="${XDG_DATA_HOME:-$HOME/.local/share}/mendix-ruby-bridge/tools"
+fi
+install_dir="$tools_dir/mxcli/$version"
 executable="$install_dir/mxcli"
 download_url="https://github.com/mendixlabs/mxcli/releases/download/v${version}/mxcli-linux-amd64"
 
@@ -16,4 +23,3 @@ mkdir -p "$install_dir"
 curl --fail --location "$download_url" --output "$executable"
 chmod +x "$executable"
 "$executable" --version
-
