@@ -62,6 +62,8 @@ module MendixBridge
       write_once(File.join(output_dir, "README.md"), readme(project_file))
       write_generated_modules(output_dir, inventory)
       write_generated_microflows(output_dir, inventory)
+      write_generated_nanoflows(output_dir, inventory)
+      write_generated_enumerations(output_dir, inventory)
       write_generated_pages(output_dir, inventory)
       write_generated_security(output_dir, inventory)
     end
@@ -88,7 +90,7 @@ module MendixBridge
       inventory.elements
         .select do |element|
           %w[
-            entity association microflow page
+            entity association enumeration microflow nanoflow page
             projectsecurity modulerole userrole
           ].include?(element.type)
         end
@@ -107,8 +109,10 @@ module MendixBridge
 
           description = JSON.parse(stdout)
           details[element.qualified_name] =
-            if element.type == "microflow"
+            if %w[microflow nanoflow].include?(element.type)
               MicroflowParser.parse(description)
+            elsif element.type == "enumeration"
+              EnumerationParser.parse(description)
             elsif element.type == "page"
               PageParser.parse(description)
             elsif %w[projectsecurity modulerole userrole].include?(element.type)
@@ -178,6 +182,24 @@ module MendixBridge
           )
         )
       end
+    end
+
+    def write_generated_nanoflows(output_dir, inventory)
+      write_generated_documents(
+        output_dir,
+        inventory,
+        type: "nanoflow",
+        directory: "nanoflows"
+      )
+    end
+
+    def write_generated_enumerations(output_dir, inventory)
+      write_generated_documents(
+        output_dir,
+        inventory,
+        type: "enumeration",
+        directory: "enumerations"
+      )
     end
 
     def write_generated_pages(output_dir, inventory)
@@ -291,10 +313,11 @@ module MendixBridge
         ```
 
         Generated domain-model files are under `generated/modules/`; generated
-        microflow files are under `generated/microflows/`; generated pages are
-        under `generated/pages/`; the consolidated security view is under
-        `generated/security/`. Every interpreted element retains its original
-        MDL plus normalized details.
+        microflow files are under `generated/microflows/`; nanoflows are under
+        `generated/nanoflows/`; enumerations are under
+        `generated/enumerations/`; generated pages are under `generated/pages/`;
+        the consolidated security view is under `generated/security/`. Every
+        interpreted element retains its original MDL plus normalized details.
 
         Explore interactively:
 
