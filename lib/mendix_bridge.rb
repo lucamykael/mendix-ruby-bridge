@@ -18,6 +18,7 @@ require_relative "mendix_bridge/snapshot_diff"
 require_relative "mendix_bridge/presenter"
 require_relative "mendix_bridge/change_planner"
 require_relative "mendix_bridge/importer"
+require_relative "mendix_bridge/project_creator"
 require_relative "mendix_bridge/html_viewer"
 require_relative "mendix_bridge/git_workflow"
 
@@ -39,7 +40,9 @@ module MendixBridge
       pretty: true,
       skip_associations: [],
       skip_module_roles: [],
-      skip_user_roles: []
+      skip_user_roles: [],
+      include_modules: false,
+      skip_modules: []
     )
       validate!(model)
       serialize(
@@ -48,7 +51,9 @@ module MendixBridge
         pretty:,
         skip_associations:,
         skip_module_roles:,
-        skip_user_roles:
+        skip_user_roles:,
+        include_modules:,
+        skip_modules:
       )
     end
 
@@ -76,7 +81,9 @@ module MendixBridge
       pretty:,
       skip_associations: [],
       skip_module_roles: [],
-      skip_user_roles: []
+      skip_user_roles: [],
+      include_modules: false,
+      skip_modules: []
     )
       case format.to_sym
       when :json
@@ -86,7 +93,9 @@ module MendixBridge
           model,
           skip_associations:,
           skip_module_roles:,
-          skip_user_roles:
+          skip_user_roles:,
+          include_modules:,
+          skip_modules:
         )
       else
         raise ArgumentError, "unsupported output format: #{format}"
