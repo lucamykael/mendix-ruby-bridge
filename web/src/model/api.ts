@@ -35,6 +35,28 @@ export interface LayoutResult {
   mdlPreview: string;
 }
 
+export interface EditableAttribute {
+  name: string;
+  type: string;
+  required: boolean;
+  length?: number | null;
+  enumeration?: string;
+  default?: unknown;
+}
+
+export interface EntityPlanResult {
+  ok: boolean;
+  blocked: boolean;
+  operation: {
+    action: "keep" | "create" | "modify" | "blocked";
+    type: string;
+    name: string;
+    changes?: Record<string, unknown>;
+    reason?: string;
+  };
+  mdl: string;
+}
+
 export interface Mocked<T> {
   data: T;
   mocked: boolean;
@@ -82,6 +104,40 @@ export function saveLayout(qn: string, positions: NodePosition[]): Promise<Mocke
     message: "Backend unavailable; layout was not saved.",
     mdlPreview: positions.map((p) => `@position(${Math.round(p.x)}, ${Math.round(p.y)})  ${p.label}`).join("\n"),
   }));
+}
+
+export function planEntity(
+  qn: string,
+  persistable: boolean,
+  attributes: EditableAttribute[],
+): Promise<Mocked<EntityPlanResult>> {
+  return fetch(`${BASE}/entity-plan`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ qn, persistable, attributes }),
+  }).then(async (response) => {
+    const body = await response.json() as EntityPlanResult | { error?: string };
+    if (response.ok) return { data: body as EntityPlanResult, mocked: false };
+    return {
+      data: entityPlanError(
+        qn,
+        ("error" in body && body.error) || `Backend rejected the plan (${response.status}).`,
+      ),
+      mocked: false,
+    };
+  }).catch(() => ({
+    data: entityPlanError(qn, "Backend unavailable; the visual plan was not saved."),
+    mocked: true,
+  }));
+}
+
+function entityPlanError(qn: string, reason: string): EntityPlanResult {
+  return {
+    ok: false,
+    blocked: true,
+    operation: { action: "blocked", type: "entity", name: qn, reason },
+    mdl: "",
+  };
 }
 
 // ---- offline fixture -------------------------------------------------------

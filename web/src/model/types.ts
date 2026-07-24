@@ -55,6 +55,7 @@ export interface Attribute {
   type?: string;
   required?: boolean;
   declaration?: string;
+  default?: unknown;
 }
 
 export interface ProjectMeta {

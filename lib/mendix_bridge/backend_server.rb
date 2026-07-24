@@ -2,6 +2,7 @@
 
 require "json"
 require "open3"
+require "time"
 require "webrick"
 
 module MendixBridge
@@ -65,6 +66,9 @@ module MendixBridge
       @server.mount_proc("/inventory") { |request, response| inventory(request, response) }
       @server.mount_proc("/api/health") { |_request, response| health(response) }
       @server.mount_proc("/api/layout") { |request, response| layout(request, response) }
+      @server.mount_proc("/api/entity-plan") do |request, response|
+        entity_plan(request, response)
+      end
       @server.mount_proc("/api/marketplace/search") do |request, response|
         marketplace_search(request, response)
       end
@@ -123,6 +127,7 @@ module MendixBridge
               File.join(@inventory_dir, "inventory", "dependencies.json")
             ),
             layout_persistence: true,
+            visual_entity_plans: true,
             marketplace_install: false
           }
         }
@@ -187,6 +192,24 @@ module MendixBridge
       json(response, { error: "mxcli returned invalid marketplace JSON" }, status: 502)
     end
 
+    def entity_plan(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      inventory = Inventory.load(
+        File.join(@inventory_dir, "inventory", "project-tree.json"),
+        details_path: File.join(@inventory_dir, "inventory", "element-details.json")
+      )
+      result = VisualEntityPlan.build(inventory:, payload:)
+      persist_visual_plan(payload.fetch("qn"), payload, result)
+      json(response, result)
+    rescue JSON::ParserError, KeyError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    rescue ArgumentError => error
+      json(response, { error: error.message }, status: 422)
+    end
+
     def marketplace_item(request, response)
       id = request.path.delete_prefix("/api/marketplace/item/")
       return json(response, { error: "invalid marketplace id" }, status: 422) unless
@@ -238,6 +261,21 @@ module MendixBridge
         position["label"].is_a?(String) &&
         position["x"].is_a?(Numeric) &&
         position["y"].is_a?(Numeric)
+    end
+
+    def persist_visual_plan(qn, payload, result)
+      path = File.join(@inventory_dir, "inventory", "visual-plans.json")
+      @layout_mutex.synchronize do
+        plans = File.file?(path) ? JSON.parse(File.read(path)) : {}
+        plans[qn] = {
+          "saved_at" => Time.now.iso8601,
+          "request" => payload,
+          "result" => result
+        }
+        temporary = "#{path}.tmp"
+        File.write(temporary, "#{JSON.pretty_generate(plans)}\n")
+        File.rename(temporary, path)
+      end
     end
 
     def json(response, payload, status: 200)

@@ -15,10 +15,32 @@ class BackendServerTest < Minitest::Test
     @web = File.join(@root, "web")
     FileUtils.mkdir_p(File.join(@inventory, "inventory"))
     FileUtils.mkdir_p(@web)
-    write_json("inventory/project-tree.json", [])
+    write_json(
+      "inventory/project-tree.json",
+      [
+        {
+          "label" => "Module",
+          "type" => "module",
+          "qualifiedName" => "Module",
+          "children" => [
+            {
+              "label" => "Customer",
+              "type" => "entity",
+              "qualifiedName" => "Module.Customer"
+            }
+          ]
+        }
+      ]
+    )
     write_json(
       "inventory/element-details.json",
-      "Module.Flow" => { "kind" => "microflow", "mdl" => "BEGIN\nEND" }
+      "Module.Flow" => { "kind" => "microflow", "mdl" => "BEGIN\nEND" },
+      "Module.Customer" => {
+        "parse_status" => "parsed",
+        "persistable" => true,
+        "attributes" => [],
+        "access_rules" => []
+      }
     )
     write_json("inventory/dependencies.json", "schema_version" => 1, "nodes" => 1, "edges" => [])
     write_json("mendix-project.json", "element_count" => 1, "imported_at" => "2026-07-24T00:00:00Z")
@@ -45,7 +67,7 @@ class BackendServerTest < Minitest::Test
     assert_equal 1, health["element_count"]
     assert_equal true, health.dig("capabilities", "dependencies")
 
-    assert_equal [], get_json("/inventory/project-tree.json")
+    assert_equal "Module", get_json("/inventory/project-tree.json").first["label"]
     assert_includes Net::HTTP.get(uri("/")), "viewer"
   end
 
@@ -71,6 +93,26 @@ class BackendServerTest < Minitest::Test
     install = post_json("/api/marketplace/install", id: "1866")
     assert_equal "403", install.code
     refute JSON.parse(install.body)["ok"]
+  end
+
+  def test_saves_visual_entity_plan_without_modifying_project
+    response = post_json(
+      "/api/entity-plan",
+      qn: "Module.Customer",
+      persistable: true,
+      attributes: [
+        { name: "Name", type: "string", length: 200, required: false }
+      ]
+    )
+
+    assert_equal "200", response.code
+    result = JSON.parse(response.body)
+    assert_equal "modify", result.dig("operation", "action")
+    assert_includes result["mdl"], "Module.Customer"
+    plans = JSON.parse(
+      File.read(File.join(@inventory, "inventory", "visual-plans.json"))
+    )
+    assert_equal "Module.Customer", plans.dig("Module.Customer", "request", "qn")
   end
 
   private
