@@ -6,6 +6,7 @@ import { erGraph } from "../model/er";
 import { flowGraph } from "../model/flow";
 import type { ElementDetail } from "../model/types";
 import type { Selection } from "./Tree";
+import PageView from "./PageView";
 
 interface Props {
   selection: Selection;
@@ -29,6 +30,7 @@ export default function Canvas({ selection, details, assocs, onSelect }: Props) 
     return null;
   }, [type, qn, detail, details, assocs]);
 
+  if (type === "page" && detail) return <PageView selection={selection} detail={detail} onSelect={onSelect} />;
   if (!graph) return null;
 
   return (
