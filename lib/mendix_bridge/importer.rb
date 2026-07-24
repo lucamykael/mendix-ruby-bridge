@@ -65,6 +65,7 @@ module MendixBridge
       write_generated_nanoflows(output_dir, inventory)
       write_generated_enumerations(output_dir, inventory)
       write_generated_pages(output_dir, inventory)
+      write_generated_project_documents(output_dir, inventory)
       write_generated_security(output_dir, inventory)
     end
 
@@ -91,15 +92,17 @@ module MendixBridge
         .select do |element|
           %w[
             entity association enumeration microflow nanoflow page
+            constant javaaction layout snippet importmapping exportmapping navprofile
             projectsecurity modulerole userrole
           ].include?(element.type)
         end
         .each do |element|
+          describe_type, describe_name = describe_target(element)
           stdout, stderr, status = Open3.capture3(
             @mxcli,
             "--json",
             "-p", project_file,
-            "describe", element.type, element.qualified_name
+            "describe", describe_type, describe_name
           )
 
           unless status.success?
@@ -113,6 +116,10 @@ module MendixBridge
               MicroflowParser.parse(description)
             elsif element.type == "enumeration"
               EnumerationParser.parse(description)
+            elsif %w[
+              constant javaaction layout snippet importmapping exportmapping navprofile
+            ].include?(element.type)
+              DocumentParser.parse(element.type, description)
             elsif element.type == "page"
               PageParser.parse(description)
             elsif %w[projectsecurity modulerole userrole].include?(element.type)
@@ -125,6 +132,17 @@ module MendixBridge
         end
 
       [details, warnings]
+    end
+
+    def describe_target(element)
+      case element.type
+      when "importmapping", "exportmapping"
+        [element.type, element.label]
+      when "navprofile"
+        ["navigation", element.qualified_name]
+      else
+        [element.type, element.qualified_name]
+      end
     end
 
     def element_details(inventory)
@@ -204,6 +222,44 @@ module MendixBridge
 
     def write_generated_pages(output_dir, inventory)
       write_generated_documents(output_dir, inventory, type: "page", directory: "pages")
+    end
+
+    def write_generated_project_documents(output_dir, inventory)
+      {
+        "constant" => "constants",
+        "javaaction" => "java_actions",
+        "layout" => "layouts",
+        "snippet" => "snippets",
+        "importmapping" => "import_mappings",
+        "exportmapping" => "export_mappings"
+      }.each do |type, directory|
+        write_generated_documents(output_dir, inventory, type:, directory:)
+      end
+
+      write_generated_navigation(output_dir, inventory)
+    end
+
+    def write_generated_navigation(output_dir, inventory)
+      generated_dir = File.join(output_dir, "generated", "navigation")
+      FileUtils.mkdir_p(generated_dir)
+      FileUtils.rm_f(Dir[File.join(generated_dir, "*.rb")])
+
+      profiles = inventory.of_type("navprofile").map do |element|
+        {
+          "name" => element.label,
+          "qualified_name" => element.qualified_name,
+          "details" => element.details
+        }
+      end
+      return if profiles.empty?
+
+      File.write(
+        File.join(generated_dir, "project.rb"),
+        RubyInventoryGenerator.ruby_source(
+          "Navigation",
+          "navigation_profiles" => profiles
+        )
+      )
     end
 
     def write_generated_documents(output_dir, inventory, type:, directory:)

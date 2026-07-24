@@ -132,6 +132,12 @@ their values, captions, and folder. Generated files live under
 widgets, data sources, attributes, actions, linked microflows/pages, view roles,
 and original MDL; generated page files live under `generated/pages/`.
 
+Constants expose type, default, and folder. Java actions expose parameters,
+return type, and source availability. Import/export mappings expose their
+structure, entities, and attribute mappings. Layouts, snippets, and navigation
+profiles also receive normalized details. Their generated Ruby inventories live
+under corresponding directories in `generated/`.
+
 Security details include project settings, user-role to module-role mappings,
 role-management permissions, module-role membership, and entity access rules
 for create/delete/read/write plus XPath constraints. The consolidated security

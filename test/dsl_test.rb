@@ -327,6 +327,109 @@ class DSLTest < Minitest::Test
     )
   end
 
+  def test_parses_constant_and_java_action_documents
+    constant = MendixBridge::DocumentParser.parse(
+      "constant",
+      "mdl" => <<~MDL
+        create or modify constant CRM.ApiKey
+          type String
+          default 'customer''s key'
+          folder 'Configuration';
+        /
+      MDL
+    )
+    action = MendixBridge::DocumentParser.parse(
+      "javaaction",
+      "mdl" => <<~MDL
+        create java action CRM.Validate(
+            Value: String not null  -- Value to validate
+        ) returns Boolean
+        as $$
+        // Java source not available from this project; body omitted by DESCRIBE.
+        $$;
+      MDL
+    )
+
+    assert_equal "String", constant["data_type"]
+    assert_equal "customer's key", constant["default"]
+    assert_equal "Configuration", constant["folder"]
+    assert_equal "Boolean", action["return_type"]
+    assert_equal false, action["source_available"]
+    assert_equal(
+      {
+        "name" => "Value",
+        "type" => "String",
+        "required" => true,
+        "description" => "Value to validate"
+      },
+      action["parameters"].first
+    )
+  end
+
+  def test_parses_mapping_layout_and_navigation_documents
+    mapping = MendixBridge::DocumentParser.parse(
+      "exportmapping",
+      "mdl" => <<~MDL
+        create export mapping CRM.CustomerExport
+          with json structure CRM.CustomerJson
+        {
+          CRM.Customer {
+            Name = CustomerName,
+            Email = EmailAddress
+          }
+        };
+      MDL
+    )
+    layout = MendixBridge::DocumentParser.parse(
+      "layout",
+      "mdl" => <<~MDL
+        -- Layout Type: Responsive
+        -- Layouts cannot be created via MDL; they must be created in Studio Pro.
+        -- layout CRM.Main
+      MDL
+    )
+    navigation = MendixBridge::DocumentParser.parse(
+      "navprofile",
+      "mdl" => <<~MDL
+        -- navigation PROFILE: Responsive
+        --   Kind: Responsive
+        create or replace navigation Responsive
+          home page CRM.Home
+          menu (
+            menu item 'Home' page CRM.Home;
+            menu item 'Refresh' nanoflow CRM.ACT_Refresh;
+          )
+        ;
+      MDL
+    )
+
+    assert_equal "export", mapping["direction"]
+    assert_equal "CRM.CustomerJson", mapping["structure"]
+    assert_equal ["CRM.Customer"], mapping["entities"]
+    assert_equal(
+      { "attribute" => "Name", "member" => "CustomerName" },
+      mapping["attribute_mappings"].first
+    )
+    assert_equal "Responsive", layout["layout_type"]
+    assert_equal true, layout["studio_pro_only"]
+    assert_equal "CRM.Home", navigation["home_page"]
+    assert_equal "CRM.ACT_Refresh", navigation.dig("menu_items", 1, "target")
+
+    imported = MendixBridge::DocumentParser.parse(
+      "importmapping",
+      "mdl" => <<~MDL
+        create import mapping CRM.CustomerImport
+          with json structure CRM.CustomerJson
+        {
+          create CRM.Customer {
+            Name = CustomerName
+          }
+        };
+      MDL
+    )
+    assert_equal ["CRM.Customer"], imported["entities"]
+  end
+
   def test_parses_page_settings_widgets_data_and_actions
     details = MendixBridge::PageParser.parse(
       "type" => "page",

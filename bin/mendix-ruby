@@ -75,7 +75,7 @@ when "import"
   puts "Imported #{inventory.elements.length} elements into #{output_dir}"
   puts "Types: #{inventory.types.map { |type, count| "#{type}=#{count}" }.join(', ')}"
   unless warnings.empty?
-    warn "Could not describe #{warnings.length} domain elements:"
+    warn "Could not describe #{warnings.length} elements:"
     warnings.each { |warning| warn "  #{warning}" }
   end
 when "refresh"
