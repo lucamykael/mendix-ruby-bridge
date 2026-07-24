@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+version="$(tr -d '[:space:]' < "$project_dir/.mxcli-version")"
+install_dir="$project_dir/.tools/mxcli/$version"
+executable="$install_dir/mxcli"
+download_url="https://github.com/mendixlabs/mxcli/releases/download/v${version}/mxcli-linux-amd64"
+
+if [[ -x "$executable" ]]; then
+  echo "mxcli $version is already installed"
+  exit 0
+fi
+
+mkdir -p "$install_dir"
+curl --fail --location "$download_url" --output "$executable"
+chmod +x "$executable"
+"$executable" --version
+

@@ -1,0 +1,232 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "optparse"
+require_relative "../lib/mendix_bridge"
+
+command = ARGV.shift
+
+case command
+when "compile"
+  options = { pretty: true, format: :json }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby compile APP.rb [options]"
+
+    opts.on("-o", "--output FILE", "Write output to FILE") do |file|
+      options[:output] = file
+    end
+
+    opts.on("--compact", "Generate compact JSON") do
+      options[:pretty] = false
+    end
+
+    opts.on("-f", "--format FORMAT", %w[json mdl], "Output format: json or mdl") do |format|
+      options[:format] = format.to_sym
+    end
+  end
+
+  parser.parse!
+  input = ARGV.shift
+  unless input && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  model = MendixBridge.load_file(File.expand_path(input))
+  output = MendixBridge.compile(model, format: options[:format], pretty: options[:pretty])
+  output << "\n" unless output.end_with?("\n")
+
+  if options[:output]
+    File.write(options[:output], output)
+  else
+    print output
+  end
+when "import"
+  options = { force: false }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby import APP.mpr --output DIR"
+
+    opts.on("-o", "--output DIR", "Create the Ruby inventory in DIR") do |dir|
+      options[:output] = File.expand_path(dir)
+    end
+
+    opts.on("--force", "Refresh an existing imported directory") do
+      options[:force] = true
+    end
+  end
+
+  parser.parse!
+  project_file = ARGV.shift
+  unless project_file && options[:output] && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  output_dir = options.fetch(:output)
+  if Dir.exist?(output_dir) && !options[:force] && !Dir.empty?(output_dir)
+    abort "Output directory is not empty; use --force to refresh it: #{output_dir}"
+  end
+
+  bridge_dir = File.expand_path("..", __dir__)
+  importer = MendixBridge::Importer.new(mxcli: File.join(bridge_dir, "bin", "mxcli"))
+  inventory, warnings = importer.import(project_file, output_dir)
+
+  puts "Imported #{inventory.elements.length} elements into #{output_dir}"
+  puts "Types: #{inventory.types.map { |type, count| "#{type}=#{count}" }.join(', ')}"
+  unless warnings.empty?
+    warn "Could not describe #{warnings.length} domain elements:"
+    warnings.each { |warning| warn "  #{warning}" }
+  end
+when "refresh"
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby refresh [IMPORTED_DIR]"
+  end
+  parser.parse!
+  output_dir = File.expand_path(ARGV.shift || ".")
+  unless ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  metadata_file = File.join(output_dir, "mendix-project.json")
+  snapshot_file = File.join(output_dir, "inventory", "project-tree.json")
+  abort "Not an imported Mendix Ruby project: #{output_dir}" unless
+    File.file?(metadata_file) && File.file?(snapshot_file)
+
+  metadata = JSON.parse(File.read(metadata_file))
+  project_file = metadata.fetch("source_project")
+  old_inventory = MendixBridge::Inventory.load(snapshot_file)
+  bridge_dir = File.expand_path("..", __dir__)
+  importer = MendixBridge::Importer.new(mxcli: File.join(bridge_dir, "bin", "mxcli"))
+  new_inventory, warnings = importer.import(project_file, output_dir)
+  changes = MendixBridge::SnapshotDiff.compare(old_inventory, new_inventory)
+
+  changes_dir = File.join(output_dir, "changes")
+  FileUtils.mkdir_p(changes_dir)
+  File.write(
+    File.join(changes_dir, "latest.json"),
+    "#{JSON.pretty_generate(changes.to_h)}\n"
+  )
+
+  if changes.empty?
+    puts "No Mendix project changes detected."
+  else
+    puts "Refresh completed:"
+    puts "  added: #{changes.added.length}"
+    puts "  modified: #{changes.modified.length}"
+    puts "  removed: #{changes.removed.length}"
+    changes.to_h.each do |kind, elements|
+      elements.each { |element| puts "  #{kind.to_s.upcase} #{element.fetch('id')}" }
+    end
+  end
+  unless warnings.empty?
+    warn "Could not describe #{warnings.length} elements; see warnings below."
+    warnings.each { |warning| warn "  #{warning}" }
+  end
+when "search"
+  options = { json: false }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby search QUERY [IMPORTED_DIR] [options]"
+    opts.on("-t", "--type TYPE", "Filter by element type") { |type| options[:type] = type }
+    opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
+  end
+  parser.parse!
+  query = ARGV.shift
+  imported_dir = File.expand_path(ARGV.shift || ".")
+  unless query && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  snapshot_file = File.join(imported_dir, "inventory", "project-tree.json")
+  abort "Not an imported Mendix Ruby project: #{imported_dir}" unless File.file?(snapshot_file)
+
+  inventory = MendixBridge::Inventory.load(snapshot_file)
+  results = inventory.search(query)
+  results = results.select { |element| element.type == options[:type] } if options[:type]
+
+  if options[:json]
+    puts JSON.pretty_generate(results.map { |element| MendixBridge::Presenter.search_result(element) })
+  elsif results.empty?
+    puts "No elements found."
+  else
+    results.each do |element|
+      item = MendixBridge::Presenter.search_result(element)
+      puts "#{item.fetch('type')}\t#{item.fetch('name')}\t#{item.fetch('path')}"
+    end
+  end
+when "inspect"
+  options = { format: :text }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby inspect ELEMENT [IMPORTED_DIR] [options]"
+    opts.on("-t", "--type TYPE", "Disambiguate by element type") { |type| options[:type] = type }
+    opts.on("--json", "Print the complete element as JSON") { options[:format] = :json }
+    opts.on("--mdl", "Print the original MDL") { options[:format] = :mdl }
+  end
+  parser.parse!
+  name = ARGV.shift
+  imported_dir = File.expand_path(ARGV.shift || ".")
+  unless name && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  snapshot_file = File.join(imported_dir, "inventory", "project-tree.json")
+  abort "Not an imported Mendix Ruby project: #{imported_dir}" unless File.file?(snapshot_file)
+
+  inventory = MendixBridge::Inventory.load(snapshot_file)
+  matches = inventory.elements.select { |candidate| candidate.qualified_name == name }
+  matches = matches.select { |candidate| candidate.type == options[:type] } if options[:type]
+  abort "Element not found: #{name}" if matches.empty?
+  if matches.length > 1
+    types = matches.map(&:type).uniq.sort.join(", ")
+    abort "Ambiguous element #{name}; choose one with --type (#{types})"
+  end
+  element = matches.first
+
+  case options[:format]
+  when :json
+    puts JSON.pretty_generate(element.to_h)
+  when :mdl
+    mdl = element.details&.fetch("mdl", nil)
+    abort "Original MDL is not available for #{name}" unless mdl
+    puts mdl
+  else
+    puts MendixBridge::Presenter.text(element)
+  end
+when "view"
+  options = {}
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby view [IMPORTED_DIR] [-o OUTPUT.html]"
+
+    opts.on("-o", "--output FILE", "Write the viewer to FILE") do |file|
+      options[:output] = File.expand_path(file)
+    end
+  end
+
+  parser.parse!
+  imported_dir = File.expand_path(ARGV.shift || ".")
+  unless ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  snapshot_file = File.join(imported_dir, "inventory", "project-tree.json")
+  abort "Not an imported Mendix Ruby project: #{imported_dir}" unless File.file?(snapshot_file)
+
+  output = MendixBridge::HtmlViewer.write(imported_dir, options[:output])
+  puts "Wrote inventory viewer to #{output}"
+  puts "Open it in a browser: file://#{output}"
+else
+  warn <<~USAGE
+    Usage:
+      mendix-ruby compile APP.rb [options]
+      mendix-ruby import APP.mpr --output DIR [--force]
+      mendix-ruby refresh [IMPORTED_DIR]
+      mendix-ruby search QUERY [IMPORTED_DIR] [--type TYPE] [--json]
+      mendix-ruby inspect ELEMENT [IMPORTED_DIR] [--type TYPE] [--json|--mdl]
+      mendix-ruby view [IMPORTED_DIR] [-o OUTPUT.html]
+  USAGE
+  exit 1
+end

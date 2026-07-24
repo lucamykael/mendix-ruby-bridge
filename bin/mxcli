@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+version="$(tr -d '[:space:]' < "$project_dir/.mxcli-version")"
+executable="$project_dir/.tools/mxcli/$version/mxcli"
+
+if [[ ! -x "$executable" ]]; then
+  echo "mxcli $version is not installed. Run: bin/setup-tools" >&2
+  exit 1
+fi
+
+exec "$executable" "$@"
+

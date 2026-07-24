@@ -1,0 +1,107 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+require "optparse"
+require "pathname"
+require "tempfile"
+require_relative "../lib/mendix_bridge"
+
+options = { allow_dirty: false }
+
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: mendix-apply APP.rb --project APP.mpr"
+
+  opts.on("-p", "--project FILE", "Target Mendix .mpr file") do |file|
+    options[:project] = File.expand_path(file)
+  end
+
+  opts.on("--allow-dirty", "Allow a target repository with uncommitted changes") do
+    options[:allow_dirty] = true
+  end
+end
+
+parser.parse!
+dsl_file = ARGV.shift
+
+unless dsl_file && options[:project] && ARGV.empty?
+  warn parser
+  exit 1
+end
+
+dsl_file = File.expand_path(dsl_file)
+project_file = options.fetch(:project)
+project_dir = File.dirname(project_file)
+bridge_dir = File.expand_path("..", __dir__)
+mxcli = File.join(bridge_dir, "bin", "mxcli")
+version_file = File.join(project_dir, ".mendix-version")
+
+abort "DSL file does not exist: #{dsl_file}" unless File.file?(dsl_file)
+abort "Mendix project does not exist: #{project_file}" unless File.file?(project_file)
+abort "Missing #{version_file}" unless File.file?(version_file)
+
+git_root, git_error, git_status = Open3.capture3(
+  "git", "-C", project_dir, "rev-parse", "--show-toplevel"
+)
+abort "Target project must be inside a Git repository: #{git_error}" unless git_status.success?
+
+git_root = git_root.strip
+dirty, = Open3.capture2("git", "-C", git_root, "status", "--porcelain")
+if !options[:allow_dirty] && !dirty.empty?
+  abort "Target repository has uncommitted changes; commit them or use --allow-dirty"
+end
+
+version = File.read(version_file).strip
+mx = File.join(Dir.home, ".mxcli", "mxbuild", version, "modeler", "mx")
+abort "Mendix mx #{version} is not installed: #{mx}" unless File.executable?(mx)
+
+model = MendixBridge.load_file(dsl_file)
+
+existing_associations = model.modules.flat_map do |app_module|
+  output, error, status = Open3.capture3(
+    mxcli,
+    "-p", project_file,
+    "-c", "SHOW ASSOCIATIONS IN #{app_module.name}"
+  )
+  abort "Could not inspect associations: #{error}" unless status.success?
+
+  output.scan(/^\|\s+([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)\s+\|/).flatten
+end
+
+declared_associations = model.modules.flat_map do |app_module|
+  app_module.entities.flat_map do |entity|
+    entity.associations.map { |association| "#{app_module.name}.#{association.name}" }
+  end
+end
+skipped_associations = declared_associations & existing_associations
+
+unless skipped_associations.empty?
+  puts "Keeping existing associations: #{skipped_associations.join(', ')}"
+end
+
+mdl = MendixBridge.compile(
+  model,
+  format: :mdl,
+  skip_associations: skipped_associations
+)
+
+Tempfile.create(["mendix-ruby-bridge-", ".mdl"]) do |file|
+  file.write(mdl)
+  file.flush
+
+  puts "1/3 Validating generated MDL..."
+  abort "MDL validation failed" unless system(mxcli, "check", file.path)
+
+  puts "2/3 Applying MDL to #{File.basename(project_file)}..."
+  abort "mxcli could not apply the model" unless system(
+    mxcli, "exec", file.path, "-p", project_file
+  )
+
+  puts "3/3 Running official Mendix consistency check..."
+  abort "Mendix consistency check failed" unless system(
+    mx, "check", project_file, chdir: project_dir
+  )
+end
+
+puts "Application completed successfully."
+puts "Review the changes with: git -C #{git_root} status --short"

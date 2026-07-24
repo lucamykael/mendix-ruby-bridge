@@ -1,0 +1,10 @@
+/.tools/
+/*.json
+/*.mdl
+
+# Local environment / secrets (never commit)
+.env
+.env.*
+!.env.example
+!.env.sample
+
