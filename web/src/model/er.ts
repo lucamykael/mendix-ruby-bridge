@@ -55,9 +55,9 @@ export function erGraph(
       position: { x: colX[lo.col], y: 30 + lo.i * 170 },
       data: { label: entityLabel(qn, details[qn]) },
       style: {
-        background: "#1d2636",
-        color: "#d7e0ee",
-        border: qn === centerQn ? "2px solid #6ea8fe" : "1px solid #3a5ea8",
+        background: "var(--panel2)",
+        color: "var(--fg)",
+        border: qn === centerQn ? "2px solid var(--accent)" : "1px solid var(--node-line)",
         borderRadius: 8,
         fontSize: 11,
         textAlign: "left" as const,
@@ -74,8 +74,8 @@ export function erGraph(
     source: a.from,
     target: a.to,
     label: `${a.type === "ReferenceSet" ? "*" : "1"} ${a.qn.split(".").pop()}`,
-    style: { stroke: "#6a7a94" },
-    labelStyle: { fill: "#8595ac", fontSize: 10 },
+    style: { stroke: "var(--edge)" },
+    labelStyle: { fill: "var(--muted)", fontSize: 10 },
   }));
   return { nodes, edges };
 }

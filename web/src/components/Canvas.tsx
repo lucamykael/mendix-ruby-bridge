@@ -46,8 +46,8 @@ export default function Canvas({ selection, details, assocs, onSelect }: Props) 
             if (node.id !== qn) onSelect(node.id);
           }}
         >
-          <Background color="#2a3547" gap={18} />
-          <MiniMap pannable zoomable maskColor="rgba(15,20,32,0.7)" nodeColor="#3a5ea8" />
+          <Background color="var(--grid)" gap={18} />
+          <MiniMap pannable zoomable maskColor="rgba(0,0,0,0.5)" nodeColor="var(--accent)" />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>

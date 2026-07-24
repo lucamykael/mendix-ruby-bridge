@@ -1,7 +1,14 @@
-import { useMemo } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { widgetTree, widgetProps, type WidgetNode } from "../model/page";
 import type { ElementDetail } from "../model/types";
 import type { Selection } from "./Tree";
+
+// Turn a dropped Toolbox label into a widget node the preview can render.
+function widgetFromLabel(label: string): WidgetNode {
+  const type = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const props = `Label: '${label}', Content: '${label}'`;
+  return { type, name: undefined, props, children: undefined };
+}
 
 const CONTAINERS = new Set([
   "layoutgrid", "row", "column", "container", "dataview", "groupbox", "scrollcontainer",
@@ -92,7 +99,25 @@ interface Props {
 
 /** Approximate visual layout preview of a page, reconstructed from its MDL. */
 export default function PageView({ selection, detail, onSelect }: Props) {
-  const tree = useMemo(() => (detail.mdl ? widgetTree(detail.mdl) : null), [detail.mdl]);
+  const [tree, setTree] = useState<WidgetNode | null>(null);
+  const [over, setOver] = useState(false);
+
+  useEffect(() => {
+    setTree(detail.mdl ? widgetTree(detail.mdl) : null);
+  }, [detail.mdl]);
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setOver(false);
+    const raw = e.dataTransfer.getData("application/mrb-item");
+    if (!raw) return;
+    const item = JSON.parse(raw) as { label: string };
+    setTree((prev) => {
+      const root: WidgetNode = prev ?? { type: "page", props: "", children: [] };
+      return { ...root, children: [...(root.children ?? []), widgetFromLabel(item.label)] };
+    });
+  };
+
   const empty = !tree || !tree.children?.length;
 
   return (
@@ -102,9 +127,14 @@ export default function PageView({ selection, detail, onSelect }: Props) {
         <span className="title">{detail.title ?? selection.label}</span>
         {detail.layout && <span className="layout-tag">{detail.layout}</span>}
       </div>
-      <div className="pageview-canvas">
+      <div
+        className={"pageview-canvas" + (over ? " drop-over" : "")}
+        onDrop={onDrop}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setOver(true); }}
+        onDragLeave={() => setOver(false)}
+      >
         {empty ? (
-          <p className="empty pad">This page has no widget body (likely a template).</p>
+          <p className="empty pad">This page has no widget body — drop widgets from the Toolbox to start.</p>
         ) : (
           tree!.children!.map((c, i) => <Node key={i} w={c} onSelect={onSelect} />)
         )}

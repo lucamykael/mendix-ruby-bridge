@@ -105,12 +105,10 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
   return { nodes, edges };
 }
 
-const KIND_STYLE: Record<FlowKind, React.CSSProperties> = {
-  terminal: { background: "#14351f", color: "#d7f5df", border: "1px solid #2f7d4d", borderRadius: 20 },
-  decision: { background: "#2a2340", color: "#e6e0ff", border: "1px solid #6d5bd0", borderRadius: 6 },
-  validation: { background: "#3a2a12", color: "#ffe6b8", border: "1px solid #b5851f", borderRadius: 6 },
-  action: { background: "#1d2636", color: "#d7e0ee", border: "1px solid #3a5ea8", borderRadius: 6 },
-  assign: { background: "#1d2636", color: "#d7e0ee", border: "1px solid #2a3547", borderRadius: 6 },
+const nodeType = (n: RawNode): string => {
+  if (n.kind === "decision") return "decision";
+  if (n.kind === "terminal") return n.label === "Start" ? "start" : "end";
+  return "activity";
 };
 
 /** Build React Flow nodes/edges for a microflow/nanoflow MDL. */
@@ -153,9 +151,9 @@ export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null 
 
   const nodes: Node[] = g.nodes.map((n) => ({
     id: String(n.id),
+    type: nodeType(n),
     position: { x: ((n.x as number) - minX) * sx, y: ((n.y as number) - minY) * sy },
-    data: { label: n.label },
-    style: { ...KIND_STYLE[n.kind], fontSize: 11, width: 172, padding: 6 },
+    data: { label: n.label, kind: n.kind },
   }));
   const edges: Edge[] = g.edges.map((e, i) => ({
     id: `e${i}`,
@@ -163,8 +161,9 @@ export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null 
     target: String(e.to),
     label: e.label ?? undefined,
     animated: false,
-    style: { stroke: "#6a7a94" },
-    labelStyle: { fill: "#8595ac", fontSize: 10 },
+    style: { stroke: "var(--edge)" },
+    labelStyle: { fill: "var(--muted)", fontSize: 10 },
+    labelBgStyle: { fill: "var(--canvas-bg)" },
   }));
   return { nodes, edges };
 }
