@@ -55,3 +55,30 @@ code { background: var(--code); padding: 1px 5px; border-radius: 4px; font: 12px
 a.ref { color: var(--accent); cursor: pointer; }
 a.ref:hover { text-decoration: underline; }
 .empty { color: var(--muted); font-style: italic; }
+
+/* ---- page layout preview ---- */
+.pageview { display: flex; flex-direction: column; height: 100%; background: #0c1018; }
+.pageview-chrome { display: flex; align-items: center; gap: 6px; padding: 7px 12px; background: var(--panel2); border-bottom: 1px solid var(--line); }
+.pageview-chrome .dot { width: 9px; height: 9px; border-radius: 50%; background: #3a4761; }
+.pageview-chrome .title { margin-left: 8px; font-weight: 600; }
+.pageview-chrome .layout-tag { margin-left: auto; color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.pageview-canvas { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.w-box { border: 1px solid var(--line); border-radius: 6px; padding: 6px; min-width: 0; }
+.w-layoutgrid { border-style: dashed; }
+.w-row { border-color: #2c3a52; }
+.w-column { border-color: #33405a; }
+.w-dataview { border-color: #3a5ea8; }
+.w-footer { border-color: #b5851f; background: #17130a; }
+.w-box-head { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-bottom: 6px; }
+.w-field { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.w-field > span:first-child { color: var(--muted); font-size: 11px; }
+.w-input { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; color: var(--fg); min-height: 26px; }
+.w-input.select { display: flex; justify-content: space-between; }
+.w-check { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.w-check .box { color: var(--accent); }
+.w-text { font-size: 12px; color: #b9c4d6; }
+.w-btn { align-self: flex-start; background: #23406b; color: #dbe7ff; border: 1px solid #3a5ea8; border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
+.w-btn:hover { background: #2b4d80; }
+.w-grid { border: 1px dashed #3a5ea8; border-radius: 5px; padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }
+.w-img { border: 1px dashed var(--line); border-radius: 5px; padding: 14px; text-align: center; color: var(--muted); }
+.w-generic { font-size: 11px; color: var(--muted); background: var(--panel); border-radius: 4px; padding: 3px 7px; align-self: flex-start; }
