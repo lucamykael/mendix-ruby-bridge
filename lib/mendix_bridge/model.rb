@@ -63,13 +63,36 @@ module MendixBridge
       end
     end
 
-    AppModule = Data.define(:name, :entities, :enumerations, :microflows) do
+    Page = Data.define(
+      :name,
+      :title,
+      :layout,
+      :folder,
+      :parameters,
+      :content,
+      :view_roles
+    ) do
+      def to_h
+        {
+          name:,
+          title:,
+          layout:,
+          folder:,
+          parameters: parameters.map(&:to_h),
+          content:,
+          view_roles:
+        }.compact
+      end
+    end
+
+    AppModule = Data.define(:name, :entities, :enumerations, :microflows, :pages) do
       def to_h
         {
           name:,
           entities: entities.map(&:to_h),
           enumerations: enumerations.map(&:to_h),
-          microflows: microflows.map(&:to_h)
+          microflows: microflows.map(&:to_h),
+          pages: pages.map(&:to_h)
         }
       end
     end
