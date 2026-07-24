@@ -85,9 +85,14 @@ MendixBridge.migration("remove-legacy-customer-data") do
   rename_enumeration_value "CRM.Status", "Waiting", to: "Pending"
   drop_enumeration_value "CRM.Status", "Obsolete"
   revoke_access "CRM.Client", role: "CRM.LegacyUser"
+  alter_module_role "CRM.Support", description: "Customer support"
+  alter_user_role "Support", module_roles: ["CRM.Support", "CRM.Admin"]
   drop :microflow, "CRM.ACT_Legacy"
 end
 ```
+
+Altering an existing user or module role is a security change, so it also lives
+in a migration rather than the declarative apply, which blocks it on purpose.
 
 Preview without changing the project:
 

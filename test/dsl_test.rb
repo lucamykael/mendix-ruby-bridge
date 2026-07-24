@@ -214,6 +214,34 @@ class DSLTest < Minitest::Test
     refute_includes mdl, "CRM.Customer"
   end
 
+  def test_builds_role_alteration_migration
+    migration = MendixBridge.migration("alter-support-roles") do
+      alter_module_role "CRM.Support", description: "Customer's support"
+      alter_user_role "Support", module_roles: ["CRM.Support", "CRM.Admin"], manage_all_roles: true
+    end
+
+    assert_equal 2, migration.operations.length
+    mdl = MendixBridge::Migration::Generator.mdl(migration)
+    assert_includes mdl,
+      "ALTER MODULE ROLE CRM.Support DESCRIPTION 'Customer''s support';"
+    assert_includes mdl,
+      "ALTER USER ROLE Support (CRM.Support, CRM.Admin) MANAGE ALL ROLES;"
+  end
+
+  def test_rejects_invalid_role_alterations
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") { alter_module_role "CRM.Support", description: "" }
+    end
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") { alter_user_role "Support", module_roles: [] }
+    end
+    assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") do
+        alter_user_role "Support", module_roles: ["NotQualified"]
+      end
+    end
+  end
+
   def test_rejects_unknown_migration_operation_types
     error = assert_raises(ArgumentError) do
       MendixBridge.migration("bad") { drop :database, "CRM.Data" }

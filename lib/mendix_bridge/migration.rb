@@ -106,6 +106,31 @@ module MendixBridge
         )
       end
 
+      def alter_module_role(role, description:)
+        raise ArgumentError, "module role description cannot be empty" if
+          description.nil? || description.to_s.empty?
+
+        add(
+          "alter_module_role",
+          "modulerole",
+          qualified!(role),
+          "description" => description.to_s
+        )
+      end
+
+      def alter_user_role(name, module_roles:, manage_all_roles: false)
+        roles = Array(module_roles).map { |role| qualified!(role) }
+        raise ArgumentError, "user role requires at least one module role" if roles.empty?
+
+        add(
+          "alter_user_role",
+          "userrole",
+          identifier!(name),
+          "module_roles" => roles,
+          "manage_all_roles" => manage_all_roles ? true : false
+        )
+      end
+
       def result
         raise ArgumentError, "migration #{@name} requires at least one operation" if
           @operations.empty?
@@ -187,12 +212,23 @@ module MendixBridge
             "#{options.fetch('value')};"
         when "revoke_access"
           "REVOKE #{options.fetch('role')} ON #{options.fetch('entity')};"
+        when "alter_module_role"
+          "ALTER MODULE ROLE #{operation.name} " \
+            "DESCRIPTION '#{escape(options.fetch('description'))}';"
+        when "alter_user_role"
+          management = options["manage_all_roles"] ? " MANAGE ALL ROLES" : ""
+          "ALTER USER ROLE #{operation.name} " \
+            "(#{options.fetch('module_roles').join(', ')})#{management};"
         else
           raise ArgumentError, "unsupported migration action: #{operation.action}"
         end
       end
 
-      private_class_method :statement
+      def self.escape(value)
+        value.to_s.gsub("'", "''")
+      end
+
+      private_class_method :statement, :escape
     end
   end
 end
