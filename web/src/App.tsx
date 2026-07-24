@@ -65,7 +65,7 @@ export default function App() {
 
   const meta = inv.meta;
   const detail = sel ? inv.details[sel.qn] : undefined;
-  const showToolbox = view === "explorer" && (sel?.type === "microflow" || sel?.type === "nanoflow");
+  const showToolbox = view === "explorer";
 
   return (
     <div className="app">
