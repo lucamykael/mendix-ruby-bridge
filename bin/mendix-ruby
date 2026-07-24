@@ -6,8 +6,45 @@ require "optparse"
 require_relative "../lib/mendix_bridge"
 
 command = ARGV.shift
+project_config = MendixBridge::Config.find
 
 case command
+when "configure"
+  options = { force: false, path: MendixBridge::Config::FILE_NAME }
+  parser = OptionParser.new do |opts|
+    opts.banner =
+      "Usage: mendix-ruby configure --project APP.mpr --inventory DIR --model APP.rb"
+    opts.on("-p", "--project FILE", "Mendix .mpr file") do |file|
+      options[:project] = File.expand_path(file)
+    end
+    opts.on("-i", "--inventory DIR", "Ruby inventory directory") do |dir|
+      options[:inventory] = File.expand_path(dir)
+    end
+    opts.on("-m", "--model FILE", "Ruby model file") do |file|
+      options[:model] = File.expand_path(file)
+    end
+    opts.on("-o", "--output FILE", "Configuration file path") do |file|
+      options[:path] = File.expand_path(file)
+    end
+    opts.on("--force", "Replace an existing configuration") do
+      options[:force] = true
+    end
+  end
+  parser.parse!
+  unless options[:project] && options[:inventory] && options[:model] && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  config = MendixBridge::Config.write(
+    options.fetch(:path),
+    project: options.fetch(:project),
+    inventory: options.fetch(:inventory),
+    model: options.fetch(:model),
+    force: options.fetch(:force)
+  )
+  puts "Wrote #{config.path}"
+  puts JSON.pretty_generate(config.to_h)
 when "deps"
   options = { direction: "both", transitive: false, json: false }
   parser = OptionParser.new do |opts|
@@ -25,7 +62,9 @@ when "deps"
   end
   parser.parse!
   name = ARGV.shift
-  imported_dir = File.expand_path(ARGV.shift || ".")
+  imported_dir = File.expand_path(
+    ARGV.shift || project_config&.inventory || "."
+  )
   unless name && ARGV.empty?
     warn parser
     exit 1
@@ -97,6 +136,7 @@ when "migrate"
   end
   parser.parse!
   migration_file = ARGV.shift
+  options[:project] ||= project_config&.project
   unless migration_file && options[:project] && ARGV.empty?
     warn parser
     exit 1
@@ -149,6 +189,7 @@ when "rollback"
   end
   parser.parse!
   backup_dir = ARGV.shift
+  options[:project] ||= project_config&.project
   unless backup_dir && options[:project] && options[:confirmation] && ARGV.empty?
     warn parser
     exit 1
@@ -221,7 +262,7 @@ when "compile"
   end
 
   parser.parse!
-  input = ARGV.shift
+  input = ARGV.shift || project_config&.model
   unless input && ARGV.empty?
     warn parser
     exit 1
@@ -251,7 +292,8 @@ when "import"
   end
 
   parser.parse!
-  project_file = ARGV.shift
+  project_file = ARGV.shift || project_config&.project
+  options[:output] ||= project_config&.inventory
   unless project_file && options[:output] && ARGV.empty?
     warn parser
     exit 1
@@ -277,7 +319,9 @@ when "refresh"
     opts.banner = "Usage: mendix-ruby refresh [IMPORTED_DIR]"
   end
   parser.parse!
-  output_dir = File.expand_path(ARGV.shift || ".")
+  output_dir = File.expand_path(
+    ARGV.shift || project_config&.inventory || "."
+  )
   unless ARGV.empty?
     warn parser
     exit 1
@@ -327,7 +371,9 @@ when "search"
   end
   parser.parse!
   query = ARGV.shift
-  imported_dir = File.expand_path(ARGV.shift || ".")
+  imported_dir = File.expand_path(
+    ARGV.shift || project_config&.inventory || "."
+  )
   unless query && ARGV.empty?
     warn parser
     exit 1
@@ -360,7 +406,9 @@ when "inspect"
   end
   parser.parse!
   name = ARGV.shift
-  imported_dir = File.expand_path(ARGV.shift || ".")
+  imported_dir = File.expand_path(
+    ARGV.shift || project_config&.inventory || "."
+  )
   unless name && ARGV.empty?
     warn parser
     exit 1
@@ -399,7 +447,8 @@ when "plan"
     opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
   end
   parser.parse!
-  dsl_file = ARGV.shift
+  dsl_file = ARGV.shift || project_config&.model
+  options[:inventory] ||= project_config&.inventory
   unless dsl_file && options[:inventory] && ARGV.empty?
     warn parser
     exit 1
@@ -439,7 +488,9 @@ when "view"
   end
 
   parser.parse!
-  imported_dir = File.expand_path(ARGV.shift || ".")
+  imported_dir = File.expand_path(
+    ARGV.shift || project_config&.inventory || "."
+  )
   unless ARGV.empty?
     warn parser
     exit 1
@@ -454,6 +505,7 @@ when "view"
 else
   warn <<~USAGE
     Usage:
+      mendix-ruby configure --project APP.mpr --inventory DIR --model APP.rb
       mendix-ruby deps ELEMENT [IMPORTED_DIR] [options]
       mendix-ruby migrate MIGRATION.rb --project APP.mpr [--dry-run]
       mendix-ruby rollback BACKUP_DIR --project APP.mpr

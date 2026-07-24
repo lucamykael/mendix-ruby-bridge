@@ -293,6 +293,47 @@ class DSLTest < Minitest::Test
     assert_equal 5, index.to_h[:nodes]
   end
 
+  def test_writes_and_discovers_project_configuration
+    Dir.mktmpdir do |directory|
+      project = File.join(directory, "mendix", "App.mpr")
+      inventory = File.join(directory, "ruby-inventory")
+      model = File.join(directory, "app.rb")
+      FileUtils.mkdir_p(File.dirname(project))
+      FileUtils.mkdir_p(inventory)
+      File.write(project, "")
+      File.write(model, "")
+
+      config = MendixBridge::Config.write(
+        File.join(directory, ".mendix-ruby.yml"),
+        project:,
+        inventory:,
+        model:
+      )
+      nested = File.join(directory, "workspace", "nested")
+      FileUtils.mkdir_p(nested)
+      discovered = MendixBridge::Config.find(nested)
+
+      assert_equal config.path, discovered.path
+      assert_equal project, discovered.project
+      assert_equal inventory, discovered.inventory
+      assert_equal model, discovered.model
+      assert_includes File.read(config.path), "project: mendix/App.mpr"
+    end
+  end
+
+  def test_rejects_unknown_configuration_keys
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, ".mendix-ruby.yml")
+      File.write(path, "version: 1\nproject: App.mpr\nsurprise: true\n")
+
+      error = assert_raises(MendixBridge::ConfigError) do
+        MendixBridge::Config.load(path)
+      end
+
+      assert_equal "unknown configuration keys: surprise", error.message
+    end
+  end
+
   def test_rejects_empty_or_duplicate_enumeration_values
     assert_raises(ArgumentError) do
       MendixBridge.app("Example") do
