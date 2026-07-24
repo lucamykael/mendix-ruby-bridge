@@ -378,4 +378,55 @@ class DSLTest < Minitest::Test
     refute summary.fetch("details").key?("raw")
     assert_includes MendixBridge::Presenter.text(element), "Type: entity"
   end
+
+  def test_plans_safe_changes_and_blocks_implicit_attribute_removal
+    inventory = MendixBridge::Inventory.new(
+      [
+        {
+          "label" => "CRM",
+          "type" => "module",
+          "qualifiedName" => "CRM",
+          "children" => [
+            { "label" => "Customer", "type" => "entity", "qualifiedName" => "CRM.Customer" },
+            { "label" => "Order", "type" => "entity", "qualifiedName" => "CRM.Order" }
+          ]
+        }
+      ],
+      details: {
+        "CRM.Customer" => {
+          "parse_status" => "parsed",
+          "persistable" => true,
+          "attributes" => [
+            { "name" => "Name", "type" => "String(200)", "required" => true },
+            { "name" => "Legacy", "type" => "Boolean", "required" => false }
+          ]
+        },
+        "CRM.Order" => {
+          "parse_status" => "parsed",
+          "persistable" => true,
+          "attributes" => []
+        }
+      }
+    )
+    model = MendixBridge.app("Example") do
+      modulo "CRM" do
+        entity "Customer" do
+          attribute "Name", :string, required: true
+        end
+        entity "Order" do
+          attribute "Number", :string
+        end
+        entity "Invoice"
+      end
+    end
+
+    plan = MendixBridge::ChangePlanner.plan(model, inventory)
+    operations = plan.operations.to_h { |operation| [operation.name, operation] }
+
+    assert_equal "blocked", operations.fetch("CRM.Customer").action
+    assert_equal ["Legacy"], operations.fetch("CRM.Customer").changes["removed_attributes"]
+    assert_equal "modify", operations.fetch("CRM.Order").action
+    assert_equal "create", operations.fetch("CRM.Invoice").action
+    assert_equal true, plan.blocked?
+  end
 end

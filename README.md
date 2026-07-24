@@ -107,6 +107,17 @@ bin/mendix-ruby inspect MyFirstModule.Customer ../ruby-bridge-sandbox-inventory 
 bin/mendix-ruby inspect Atlas_Web_Content.Phone_Form ../ruby-bridge-sandbox-inventory --type page
 ```
 
+Preview a Ruby DSL change against an imported snapshot:
+
+```sh
+bin/mendix-ruby plan examples/sandbox_app.rb \
+  --inventory ../ruby-bridge-sandbox-inventory
+```
+
+Use `--json` for automation. Undeclared Mendix elements are preserved. Implicit
+attribute removals, missing modules, unparsed entities, and changes to existing
+associations are reported as `BLOCKED`; a blocked plan exits with status 2.
+
 ## DSL
 
 ```ruby
