@@ -78,6 +78,7 @@ module MendixBridge
       end
       @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
       @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
+      @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
       @server.mount_proc("/api/marketplace/install") do |_request, response|
         json(
           response,
@@ -377,6 +378,20 @@ module MendixBridge
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
     rescue JSON::ParserError
       json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # Lists the reviewable drafts saved by the visual builders so the viewer can
+    # surface them (they only exist as inventory sidecars otherwise).
+    def drafts(response)
+      entity_path = File.join(@inventory_dir, "inventory", "visual-plans.json")
+      page_path = File.join(@inventory_dir, "inventory", "page-plans.json")
+      json(
+        response,
+        {
+          entities: File.file?(entity_path) ? JSON.parse(File.read(entity_path)) : {},
+          pages: File.file?(page_path) ? JSON.parse(File.read(page_path)) : {}
+        }
+      )
     end
 
     def page_detail(qn)

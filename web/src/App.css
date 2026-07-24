@@ -168,19 +168,30 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .sp-diamond { width: 34px; height: 34px; background: var(--node-decision); border: 1px solid var(--node-line);
   transform: rotate(45deg); border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
 
-/* ---- toolbox (right panel) ---- */
-.toolbox { width: 200px; border-left: 1px solid var(--line); background: var(--panel);
-  overflow: auto; padding: 8px; flex: none; }
-.toolbox-title { font-size: 12px; font-weight: 600; color: var(--fg); padding: 4px 6px 10px; }
-.tb-group { margin-bottom: 12px; }
-.tb-group-title { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 6px 6px; }
-.tb-items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.tb-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 4px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); cursor: grab; }
-.tb-item:hover { border-color: var(--accent); }
-.tb-icon { width: 22px; height: 22px; display: grid; place-items: center; background: var(--node-activity);
-  color: var(--node-activity-fg); border-radius: 4px; font-size: 12px; }
-.tb-label { font-size: 9px; color: var(--muted); text-align: center; line-height: 1.1; }
+/* ---- toolbox (right panel, Studio Pro style) ---- */
+.toolbox { width: 224px; border-left: 1px solid var(--line); background: var(--panel);
+  overflow: auto; padding: 10px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+.toolbox-title { font-size: 12px; font-weight: 600; color: var(--fg); padding: 0 2px; }
+.tb-tabs { display: flex; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 2px; gap: 2px; }
+.tb-tabs button { flex: 1; background: transparent; border: 0; color: var(--muted); font-size: 11px;
+  padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+.tb-tabs button.on { background: var(--accent); color: #fff; }
+.tb-search { background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+  border-radius: 6px; padding: 5px 9px; font-size: 12px; width: 100%; }
+.tb-group { margin-bottom: 2px; }
+.tb-group-title { display: flex; align-items: center; gap: 5px; width: 100%; text-align: left;
+  background: var(--panel2); border: 0; border-radius: 5px; padding: 5px 8px; margin: 0 0 8px;
+  font-size: 11px; font-weight: 600; color: var(--fg); cursor: pointer; }
+.tb-chev { font-size: 9px; color: var(--muted); transition: transform .12s; }
+.tb-chev.open { transform: rotate(90deg); }
+.tb-items { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 0 2px 8px; }
+.tb-item { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px 7px;
+  border: 1px solid transparent; border-radius: 7px; background: transparent; cursor: grab; }
+.tb-item:hover { border-color: var(--accent); background: var(--panel2); }
+.tb-icon { width: 34px; height: 30px; display: grid; place-items: center;
+  border: 1px solid var(--node-line); background: var(--panel2); color: var(--fg);
+  border-radius: 5px; font-size: 15px; }
+.tb-label { font-size: 9.5px; color: var(--muted); text-align: center; line-height: 1.15; }
 
 /* ---- status bar ---- */
 .statusbar { display: flex; align-items: center; gap: 12px; padding: 4px 14px; font-size: 11px;
@@ -295,3 +306,14 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .git-empty { color: var(--muted); font-style: italic; }
 .w-btn:disabled { opacity: .4; cursor: default; }
 .w-btn.danger { background: var(--node-merge); }
+
+/* Drafts view */
+.drafts { flex: 1; overflow: auto; padding: 18px 22px; max-width: 860px; }
+.drafts h3 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.draft-hint { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+.draft-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 12px; margin-bottom: 10px; }
+.draft-head { display: flex; align-items: center; gap: 10px; }
+.draft-when { color: var(--muted); font-size: 11px; margin-left: auto; }
+.draft-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.draft-card pre { margin-top: 8px; max-height: 240px; }
+.draft-card summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }

@@ -6,13 +6,14 @@ import Marketplace from "./components/Marketplace";
 import Toolbox from "./components/Toolbox";
 import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
+import Drafts from "./components/Drafts";
 import { loadHealth, loadInventory } from "./model/data";
 import { collectAssocs } from "./model/er";
 import type { BackendHealth, Inventory, TreeNode } from "./model/types";
 import "./themes.css";
 import "./App.css";
 
-type View = "explorer" | "marketplace" | "git" | "er";
+type View = "explorer" | "marketplace" | "git" | "er" | "drafts";
 
 // Ruby is the default look; Studio Pro and the editor palettes remain
 // selectable. Keep the default id in sync with the localStorage fallback below.
@@ -99,6 +100,7 @@ export default function App() {
           <button className={view === "explorer" ? "on" : ""} onClick={() => setView("explorer")}>App Explorer</button>
           <button className={view === "er" ? "on" : ""} onClick={() => setView("er")}>ER Diagram</button>
           <button className={view === "marketplace" ? "on" : ""} onClick={() => setView("marketplace")}>Marketplace</button>
+          <button className={view === "drafts" ? "on" : ""} onClick={() => setView("drafts")}>Drafts</button>
           {health?.capabilities?.git && (
             <button className={view === "git" ? "on" : ""} onClick={() => setView("git")}>Git</button>
           )}
@@ -118,6 +120,13 @@ export default function App() {
         <Marketplace />
       ) : view === "git" ? (
         <GitPanel />
+      ) : view === "drafts" ? (
+        <Drafts
+          onOpen={(qn) => {
+            selectByQn(qn);
+            setView("explorer");
+          }}
+        />
       ) : view === "er" ? (
         <ERDiagram
           tree={tree}
