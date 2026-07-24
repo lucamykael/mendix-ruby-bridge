@@ -7,7 +7,7 @@ require_relative "../lib/mendix_bridge"
 
 options = { studio_closed: false, fetch: false }
 parser = OptionParser.new do |opts|
-  opts.banner = "Usage: mendix-git COMMAND [BRANCH] --project APP.mpr [options]"
+  opts.banner = "Usage: mendix-git COMMAND [ARGUMENTS] [--project APP.mpr] [options]"
   opts.on("-p", "--project FILE", "Mendix .mpr file") { |file| options[:project] = File.expand_path(file) }
   opts.on("-i", "--inventory DIR", "Refresh this Ruby inventory after switching") do |dir|
     options[:inventory] = File.expand_path(dir)
@@ -15,16 +15,20 @@ parser = OptionParser.new do |opts|
   opts.on("--studio-closed", "Confirm Studio Pro is closed") { options[:studio_closed] = true }
   opts.on("--fetch", "Fetch and prune origin before the command") { options[:fetch] = true }
   opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
+  opts.on("-m", "--message MESSAGE", "Stash message") { |message| options[:message] = message }
+  opts.on("-u", "--include-untracked", "Include untracked files in stash push") do
+    options[:include_untracked] = true
+  end
 end
 
 parser.parse!
 command = ARGV.shift
-branch = ARGV.shift
+arguments = ARGV.dup
 unless options[:project]
   candidates = Dir[File.join(Dir.pwd, "*.mpr")]
   options[:project] = candidates.first if candidates.length == 1
 end
-unless command && options[:project] && ARGV.empty?
+unless command && options[:project]
   warn parser
   warn "Run inside a directory containing one .mpr file or pass --project."
   exit 1
@@ -41,24 +45,73 @@ workflow.fetch if options[:fetch]
 
 result = case command
 when "status"
-  abort "status does not accept a branch" if branch
+  abort "status does not accept arguments" unless arguments.empty?
   workflow.status
 when "branches"
-  abort "branches does not accept a branch" if branch
+  abort "branches does not accept arguments" unless arguments.empty?
   workflow.branches
 when "switch"
+  branch = arguments.shift
   abort "switch requires a branch" unless branch
+  abort "switch accepts only one branch" unless arguments.empty?
   workflow.switch(branch, studio_closed: options[:studio_closed])
 when "new"
+  branch = arguments.shift
   abort "new requires a branch" unless branch
+  abort "new accepts only one branch" unless arguments.empty?
   workflow.create(branch, studio_closed: options[:studio_closed])
+when "stash"
+  action = arguments.shift
+  reference = arguments.shift
+  abort "stash accepts at most an action and reference" unless arguments.empty?
+  case action
+  when "push"
+    abort "stash push does not accept a reference" if reference
+    workflow.stash_push(
+      studio_closed: options[:studio_closed],
+      message: options[:message],
+      include_untracked: options[:include_untracked]
+    )
+  when "list"
+    abort "stash list does not accept a reference" if reference
+    workflow.stash_list
+  when "show"
+    workflow.stash_show(reference || "stash@{0}")
+  when "apply"
+    workflow.stash_apply(
+      reference || "stash@{0}",
+      studio_closed: options[:studio_closed]
+    )
+  when "pop"
+    workflow.stash_apply(
+      reference || "stash@{0}",
+      studio_closed: options[:studio_closed],
+      drop: true
+    )
+  when "drop"
+    workflow.stash_drop(reference || "stash@{0}")
+  else
+    abort "stash expects push, list, show, apply, pop, or drop"
+  end
+when "merge"
+  branch = arguments.shift
+  abort "merge requires a branch" unless branch
+  abort "merge accepts only one branch" unless arguments.empty?
+  workflow.merge(branch, studio_closed: options[:studio_closed])
+when "rebase"
+  branch = arguments.shift
+  abort "rebase requires a branch" unless branch
+  abort "rebase accepts only one branch" unless arguments.empty?
+  workflow.rebase(branch, studio_closed: options[:studio_closed])
 else
-  abort "unknown command: #{command}; expected status, branches, switch, or new"
+  abort "unknown command: #{command}; expected status, branches, switch, new, stash, merge, or rebase"
 end
 
 if options[:json]
   puts JSON.pretty_generate(result)
 elsif result.is_a?(Array)
+  puts result
+elsif result.is_a?(String)
   puts result
 else
   result.each { |key, value| puts "#{key}: #{value}" }
