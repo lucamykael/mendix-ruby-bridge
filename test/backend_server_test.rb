@@ -40,6 +40,13 @@ class BackendServerTest < Minitest::Test
         "persistable" => true,
         "attributes" => [],
         "access_rules" => []
+      },
+      "Module.Home" => {
+        "parse_status" => "parsed",
+        "title" => "Home",
+        "layout" => "Atlas_Core.Default",
+        "parameters" => [],
+        "mdl" => "create or modify page Module.Home (Title: 'Home') {}"
       }
     )
     write_json("inventory/dependencies.json", "schema_version" => 1, "nodes" => 1, "edges" => [])
@@ -125,6 +132,32 @@ class BackendServerTest < Minitest::Test
       File.read(File.join(@inventory, "inventory", "visual-plans.json"))
     )
     assert_equal "Module.Customer", plans.dig("Module.Customer", "request", "qn")
+  end
+
+  def test_saves_a_built_page_draft
+    response = post_json(
+      "/api/page",
+      qn: "Module.Home",
+      content: "dataview dv1 (DataSource: $object) {\n  textbox tb (Attribute: Name)\n}"
+    )
+
+    assert_equal "200", response.code
+    body = JSON.parse(response.body)
+    assert body["ok"]
+    assert_includes body["mdl"], "CREATE OR MODIFY PAGE Module.Home"
+    assert_includes body["mdl"], "Title: 'Home'"
+    assert_includes body["mdl"], "textbox tb"
+
+    drafts = JSON.parse(File.read(File.join(@inventory, "inventory", "page-plans.json")))
+    assert_equal true, drafts.dig("Module.Home", "valid")
+    assert_includes drafts.dig("Module.Home", "content"), "dataview dv1"
+
+    unknown = post_json("/api/page", qn: "Module.Missing", content: "")
+    assert_equal "404", unknown.code
+  end
+
+  def test_health_reports_page_drafts_capability
+    assert_equal true, get_json("/api/health").dig("capabilities", "page_drafts")
   end
 
   private

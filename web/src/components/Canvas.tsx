@@ -5,7 +5,7 @@ import type { Assoc } from "../model/er";
 import { erGraph } from "../model/er";
 import type { ElementDetail, NodePosition } from "../model/types";
 import type { Selection } from "./Tree";
-import PageView from "./PageView";
+import PageBuilder from "./PageBuilder";
 import FlowCanvas from "./FlowCanvas";
 
 interface Props {
@@ -31,7 +31,7 @@ export default function Canvas({ selection, details, assocs, layouts, onSelect }
     [type, qn, details, assocs],
   );
 
-  if (type === "page" && detail) return <PageView selection={selection} detail={detail} onSelect={onSelect} />;
+  if (type === "page" && detail) return <PageBuilder selection={selection} detail={detail} onSelect={onSelect} />;
   if ((type === "microflow" || type === "nanoflow") && detail?.mdl)
     return <FlowCanvas qn={qn} mdl={detail.mdl} savedPositions={layouts[qn]} />;
 

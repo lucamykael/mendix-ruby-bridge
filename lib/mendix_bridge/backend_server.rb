@@ -2,6 +2,7 @@
 
 require "json"
 require "open3"
+require "tempfile"
 require "time"
 require "webrick"
 
@@ -76,6 +77,7 @@ module MendixBridge
         marketplace_item(request, response)
       end
       @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
+      @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
       @server.mount_proc("/api/marketplace/install") do |_request, response|
         json(
           response,
@@ -130,7 +132,8 @@ module MendixBridge
             layout_persistence: true,
             visual_entity_plans: true,
             marketplace_install: false,
-            git: git_workflow ? true : false
+            git: git_workflow ? true : false,
+            page_drafts: true
           }
         }
       )
@@ -346,6 +349,87 @@ module MendixBridge
         File.write(temporary, "#{JSON.pretty_generate(plans)}\n")
         File.rename(temporary, path)
       end
+    end
+
+    # Accepts a visually-built page body, wraps it in CREATE OR MODIFY PAGE using
+    # the page's imported settings, validates the MDL with `mxcli check`, and saves
+    # a reviewable draft. It never writes the .mpr — applying stays in the guarded
+    # workflow (mxcli exec / bin/mendix-apply).
+    def page_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      qn = payload.fetch("qn")
+      content = payload.fetch("content").to_s
+      detail = page_detail(qn)
+      return json(response, { error: "unknown page" }, status: 404) unless detail
+
+      mdl = build_page_mdl(qn, detail, content)
+      ok, message = check_mdl(mdl)
+      persist_page_draft(qn, content, mdl, ok, message)
+      json(
+        response,
+        { ok:, mdl:, message: ok ? "Page MDL validated and draft saved." : message },
+        status: ok ? 200 : 422
+      )
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    def page_detail(qn)
+      path = File.join(@inventory_dir, "inventory", "element-details.json")
+      return nil unless File.file?(path)
+
+      detail = JSON.parse(File.read(path))[qn]
+      detail if detail.is_a?(Hash) && detail.key?("mdl")
+    end
+
+    def build_page_mdl(qn, detail, content)
+      settings = ["Title: '#{escape_mdl(detail['title'] || qn.split('.').last)}'"]
+      settings << "Layout: #{detail['layout']}" if detail["layout"]
+      settings << "Folder: '#{escape_mdl(detail['folder'])}'" if detail["folder"]
+      params = Array(detail["parameters"]).map do |parameter|
+        "$#{parameter['name']}: #{parameter['type']}"
+      end
+      settings << "Params: { #{params.join(', ')} }" unless params.empty?
+
+      body = content.strip.empty? ? "" : content.lines.map { |line| "  #{line.rstrip}" }.join("\n")
+      "CREATE OR MODIFY PAGE #{qn} (\n  #{settings.join(",\n  ")}\n) {\n#{body}\n}\n"
+    end
+
+    def check_mdl(mdl)
+      Tempfile.create(["mendix-page-", ".mdl"]) do |file|
+        file.write(mdl)
+        file.flush
+        stdout, stderr, status = Open3.capture3(@mxcli, "check", file.path)
+        return [true, nil] if status.success?
+
+        [false, (stderr.empty? ? stdout : stderr).strip]
+      end
+    end
+
+    def persist_page_draft(qn, content, mdl, ok, message)
+      path = File.join(@inventory_dir, "inventory", "page-plans.json")
+      @layout_mutex.synchronize do
+        plans = File.file?(path) ? JSON.parse(File.read(path)) : {}
+        plans[qn] = {
+          "saved_at" => Time.now.iso8601,
+          "content" => content,
+          "mdl" => mdl,
+          "valid" => ok,
+          "message" => message
+        }.compact
+        temporary = "#{path}.tmp"
+        File.write(temporary, "#{JSON.pretty_generate(plans)}\n")
+        File.rename(temporary, path)
+      end
+    end
+
+    def escape_mdl(value)
+      value.to_s.gsub("'", "''")
     end
 
     def json(response, payload, status: 200)
