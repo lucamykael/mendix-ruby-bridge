@@ -140,6 +140,30 @@ function entityPlanError(qn: string, reason: string): EntityPlanResult {
   };
 }
 
+// ---- page builder ----------------------------------------------------------
+
+export interface SavePageResult {
+  ok: boolean;
+  mdl?: string;
+  message: string;
+}
+
+/** Validate + persist a built page as a draft. Surfaces the backend message. */
+export async function savePage(qn: string, content: string): Promise<SavePageResult> {
+  try {
+    const r = await fetch(`${BASE}/page`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ qn, content }),
+    });
+    const body = (await r.json().catch(() => ({}))) as Partial<SavePageResult> & { error?: string };
+    if (!r.ok && body.ok === undefined) throw new Error(body.error ?? `Save failed (${r.status}).`);
+    return body as SavePageResult;
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e) };
+  }
+}
+
 // ---- guarded Git workflow --------------------------------------------------
 // Mutations require confirming Studio Pro is closed (it locks the .mpr). Unlike
 // the marketplace/layout helpers these never fake success: a failed guard or a

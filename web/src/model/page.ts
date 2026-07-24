@@ -86,3 +86,59 @@ export function widgetProps(w: WidgetNode) {
     dataSource: w.props.match(/DataSource:\s*([^,)\n]+)/)?.[1]?.trim(),
   };
 }
+
+// ---- structured props editing (for the builder's property panel) -----------
+// Props are `Key: value` segments joined by top-level commas. We keep them as an
+// ordered list so editing a known key preserves unknown ones on serialize.
+
+export interface PropPair {
+  key: string;
+  value: string;
+}
+
+export function parseProps(props: string): PropPair[] {
+  const pairs: PropPair[] = [];
+  let depth = 0;
+  let inStr = false;
+  let buf = "";
+  const push = () => {
+    const seg = buf.trim();
+    buf = "";
+    if (!seg) return;
+    const idx = seg.indexOf(":");
+    if (idx === -1) pairs.push({ key: seg, value: "" });
+    else pairs.push({ key: seg.slice(0, idx).trim(), value: seg.slice(idx + 1).trim() });
+  };
+  for (let i = 0; i < props.length; i++) {
+    const c = props[i];
+    if (inStr) {
+      if (c === "'" && props[i - 1] !== "\\") inStr = false;
+      buf += c;
+      continue;
+    }
+    if (c === "'") { inStr = true; buf += c; continue; }
+    if (c === "(" || c === "{") { depth++; buf += c; continue; }
+    if (c === ")" || c === "}") { depth--; buf += c; continue; }
+    if (c === "," && depth === 0) { push(); continue; }
+    buf += c;
+  }
+  push();
+  return pairs;
+}
+
+export function serializeProps(pairs: PropPair[]): string {
+  return pairs.filter((p) => p.key).map((p) => (p.value === "" ? p.key : `${p.key}: ${p.value}`)).join(", ");
+}
+
+export function getProp(pairs: PropPair[], key: string): string | undefined {
+  return pairs.find((p) => p.key.toLowerCase() === key.toLowerCase())?.value;
+}
+
+/** Set/remove a key (empty value removes it), preserving order; appends if new. */
+export function setProp(pairs: PropPair[], key: string, value: string): PropPair[] {
+  const next = pairs.filter((p) => p.key.toLowerCase() !== key.toLowerCase() || value !== "");
+  const idx = next.findIndex((p) => p.key.toLowerCase() === key.toLowerCase());
+  if (value === "") return next;
+  if (idx === -1) return [...next, { key, value }];
+  return next.map((p) => (p.key.toLowerCase() === key.toLowerCase() ? { key, value } : p));
+}
