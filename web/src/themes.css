@@ -1,0 +1,113 @@
+/* Theme palettes. Semantic variables consumed across the app; each [data-theme]
+   overrides them. Default (Studio Pro dark) lives on :root. */
+
+:root,
+[data-theme="studio-pro"] {
+  --bg: #171d29;
+  --panel: #1b2230;
+  --panel2: #212a3b;
+  --line: #2c3648;
+  --fg: #c6cedd;
+  --muted: #7f8ca3;
+  --accent: #4c6ef5;
+  --sel: #2b4b7d;
+  --canvas-bg: #1e2636;
+  --grid: #2b3648;
+  --node-start: #2f9e44;
+  --node-end: #4c6ef5;
+  --node-activity: #3b5bdb;
+  --node-activity-fg: #dbe4ff;
+  --node-decision: #f0b429;
+  --node-decision-fg: #3a2d05;
+  --node-merge: #e03131;
+  --node-line: #46587a;
+  --edge: #6a7a94;
+}
+
+[data-theme="tokyo-night"] {
+  --bg: #16161e;
+  --panel: #1a1b26;
+  --panel2: #24283b;
+  --line: #2c3049;
+  --fg: #c0caf5;
+  --muted: #787c99;
+  --accent: #7aa2f7;
+  --sel: #2d3f76;
+  --canvas-bg: #1a1b26;
+  --grid: #2a2e45;
+  --node-start: #9ece6a;
+  --node-end: #7aa2f7;
+  --node-activity: #3d59a1;
+  --node-activity-fg: #c0caf5;
+  --node-decision: #e0af68;
+  --node-decision-fg: #1f1a10;
+  --node-merge: #f7768e;
+  --node-line: #545c7e;
+  --edge: #565f89;
+}
+
+[data-theme="dracula"] {
+  --bg: #21222c;
+  --panel: #282a36;
+  --panel2: #343746;
+  --line: #3c3f51;
+  --fg: #f8f8f2;
+  --muted: #8a8fa8;
+  --accent: #bd93f9;
+  --sel: #44475a;
+  --canvas-bg: #282a36;
+  --grid: #3a3d4e;
+  --node-start: #50fa7b;
+  --node-end: #bd93f9;
+  --node-activity: #44567a;
+  --node-activity-fg: #f8f8f2;
+  --node-decision: #f1fa8c;
+  --node-decision-fg: #26270f;
+  --node-merge: #ff5555;
+  --node-line: #6272a4;
+  --edge: #6272a4;
+}
+
+[data-theme="gruvbox"] {
+  --bg: #1d2021;
+  --panel: #282828;
+  --panel2: #3c3836;
+  --line: #504945;
+  --fg: #ebdbb2;
+  --muted: #a89984;
+  --accent: #83a598;
+  --sel: #45403d;
+  --canvas-bg: #282828;
+  --grid: #3c3836;
+  --node-start: #b8bb26;
+  --node-end: #83a598;
+  --node-activity: #458588;
+  --node-activity-fg: #ebdbb2;
+  --node-decision: #fabd2f;
+  --node-decision-fg: #291f04;
+  --node-merge: #fb4934;
+  --node-line: #665c54;
+  --edge: #7c6f64;
+}
+
+[data-theme="catppuccin"] {
+  --bg: #181825;
+  --panel: #1e1e2e;
+  --panel2: #313244;
+  --line: #45475a;
+  --fg: #cdd6f4;
+  --muted: #9399b2;
+  --accent: #89b4fa;
+  --sel: #3b3f5c;
+  --canvas-bg: #1e1e2e;
+  --grid: #313244;
+  --node-start: #a6e3a1;
+  --node-end: #89b4fa;
+  --node-activity: #45568a;
+  --node-activity-fg: #cdd6f4;
+  --node-decision: #f9e2af;
+  --node-decision-fg: #2a2410;
+  --node-merge: #f38ba8;
+  --node-line: #6c7086;
+  --edge: #6c7086;
+}

@@ -5,6 +5,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { flowGraph } from "../model/flow";
 import { saveLayout, type NodePosition } from "../model/api";
+import { nodeTypes } from "./nodes";
 
 /**
  * Editable microflow/nanoflow canvas. Nodes are draggable; rearranging them
@@ -58,13 +59,14 @@ export default function FlowCanvas({ qn, mdl }: { qn: string; mdl: string }) {
         <ReactFlow
           nodes={nodes}
           edges={edges}
+          nodeTypes={nodeTypes}
           onNodesChange={handleChanges}
           fitView
           minZoom={0.15}
           proOptions={{ hideAttribution: true }}
         >
-          <Background color="#2a3547" gap={18} />
-          <MiniMap pannable zoomable maskColor="rgba(15,20,32,0.7)" nodeColor="#3a5ea8" />
+          <Background color="var(--grid)" gap={18} />
+          <MiniMap pannable zoomable maskColor="rgba(0,0,0,0.5)" nodeColor="var(--accent)" />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
