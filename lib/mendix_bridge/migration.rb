@@ -106,6 +106,50 @@ module MendixBridge
         )
       end
 
+      def create_module(name)
+        add("create_module", "module", identifier!(name))
+      end
+
+      # Re-declares an existing association in place (UUID preserved by mxcli's
+      # CREATE OR MODIFY). Requires the full desired shape, not a delta.
+      def alter_association(name, from:, to:, type:, owner: "Default")
+        type = type.to_s
+        raise ArgumentError, "association type must be Reference or ReferenceSet" unless
+          %w[Reference ReferenceSet].include?(type)
+        owner = owner.to_s
+        raise ArgumentError, "association owner must be Default or Both" unless
+          %w[Default Both].include?(owner)
+
+        add(
+          "alter_association",
+          "association",
+          qualified!(name),
+          "from" => qualified!(from),
+          "to" => qualified!(to),
+          "type" => type,
+          "owner" => owner
+        )
+      end
+
+      # Changing an attribute's type has no in-place ALTER in MDL: it is an
+      # explicit DROP + ADD, which discards the column's data. That is why it
+      # lives here and not in the declarative apply.
+      def retype_attribute(entity, name, to:)
+        entity = qualified!(entity)
+        name = identifier!(name)
+        type = to.to_s.strip
+        raise ArgumentError, "retype target type cannot be empty" if type.empty?
+
+        add(
+          "retype_attribute",
+          "attribute",
+          "#{entity}.#{name}",
+          "entity" => entity,
+          "attribute" => name,
+          "type" => type
+        )
+      end
+
       def alter_module_role(role, description:)
         raise ArgumentError, "module role description cannot be empty" if
           description.nil? || description.to_s.empty?
@@ -212,6 +256,18 @@ module MendixBridge
             "#{options.fetch('value')};"
         when "revoke_access"
           "REVOKE #{options.fetch('role')} ON #{options.fetch('entity')};"
+        when "create_module"
+          "CREATE MODULE #{operation.name};"
+        when "alter_association"
+          "CREATE OR MODIFY ASSOCIATION #{operation.name}\n" \
+            "  FROM #{options.fetch('from')} TO #{options.fetch('to')}\n" \
+            "  TYPE #{options.fetch('type')}\n" \
+            "  OWNER #{options.fetch('owner')};"
+        when "retype_attribute"
+          "ALTER ENTITY #{options.fetch('entity')} DROP ATTRIBUTE " \
+            "#{options.fetch('attribute')};\n" \
+            "ALTER ENTITY #{options.fetch('entity')} ADD ATTRIBUTE " \
+            "#{options.fetch('attribute')}: #{options.fetch('type')};"
         when "alter_module_role"
           "ALTER MODULE ROLE #{operation.name} " \
             "DESCRIPTION '#{escape(options.fetch('description'))}';"
