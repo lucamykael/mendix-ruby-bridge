@@ -18,6 +18,10 @@ module MendixBridge
       new(model, skip_associations:).generate
     end
 
+    def self.microflow_statement(app_module, microflow)
+      new(nil).send(:microflow_statement, app_module, microflow)
+    end
+
     def initialize(model, skip_associations: [])
       @model = model
       @skip_associations = skip_associations
@@ -27,6 +31,9 @@ module MendixBridge
       statements = @model.modules.flat_map do |app_module|
         enumerations = app_module.enumerations.map do |enumeration|
           enumeration_statement(app_module, enumeration)
+        end
+        microflows = app_module.microflows.map do |microflow|
+          microflow_statement(app_module, microflow)
         end
         entities = app_module.entities.map { |entity| entity_statement(app_module, entity) }
         associations = app_module.entities.flat_map do |entity|
@@ -39,7 +46,7 @@ module MendixBridge
           end.compact
         end
 
-        enumerations + entities + associations
+        enumerations + entities + associations + microflows
       end
 
       statements.join("\n\n") << "\n"
@@ -60,6 +67,25 @@ module MendixBridge
       "CREATE OR MODIFY ENUMERATION #{qualified(app_module.name, enumeration.name)} (\n" \
         "#{values.join(",\n")}\n" \
         ")#{folder};"
+    end
+
+    def microflow_statement(app_module, microflow)
+      name = qualified(app_module.name, microflow.name)
+      parameters = microflow.parameters.map do |parameter|
+        "  $#{identifier(parameter.name)}: #{qualified_or_scalar(parameter.type)}"
+      end
+      returns = microflow.return_type ? "\nRETURNS #{qualified_or_scalar(microflow.return_type)}" : ""
+      folder = microflow.folder ? "\nFOLDER '#{escape_string(microflow.folder)}'" : ""
+      body = microflow.body.lines.map { |line| "  #{line.rstrip}" }.join("\n")
+      grants = microflow.execute_roles.map do |role|
+        "GRANT EXECUTE ON MICROFLOW #{name} TO #{qualified_reference(role)};"
+      end
+
+      statement = "CREATE OR MODIFY MICROFLOW #{name} (\n" \
+        "#{parameters.join(",\n")}\n" \
+        ")#{returns}#{folder}\n" \
+        "BEGIN\n#{body}\nEND;"
+      grants.empty? ? statement : "#{statement}\n\n#{grants.join("\n")}"
     end
 
     def entity_statement(app_module, entity)
@@ -136,6 +162,10 @@ module MendixBridge
       raise ValidationError, "expected qualified reference, got #{value.inspect}" if parts.length != 2
 
       qualified(*parts)
+    end
+
+    def qualified_or_scalar(value)
+      value.to_s.include?(".") ? qualified_reference(value) : identifier(value)
     end
 
     def identifier(value)

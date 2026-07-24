@@ -8,7 +8,7 @@ module MendixBridge
         header = mdl.match(
           /\b(?:microflow|nanoflow)\s+(?<name>[\w.]+)\s*\((?<parameters>.*?)\)\s*(?:returns\s+(?<returns>\S+))?/im
         )
-        body = mdl[/\nbegin\s*\n(?<body>.*)\nend;\s*(?:\n|$)/m, :body]
+        body = mdl[/\nbegin\s*\n(?<body>.*)\nend;\s*(?:\n|$)/im, :body]
 
         return { "mdl" => mdl, "parse_status" => "unsupported" } unless header && body
 

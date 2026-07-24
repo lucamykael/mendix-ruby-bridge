@@ -70,6 +70,7 @@ module MendixBridge
         @name = name.to_s
         @entities = []
         @enumerations = []
+        @microflows = []
       end
 
       def entity(name, persistable: true, &block)
@@ -88,11 +89,76 @@ module MendixBridge
         @enumerations << EnumerationBuilder.build(name, folder:, &block)
       end
 
+      def microflow(name, returns: nil, folder: nil, &block)
+        if @microflows.any? { |microflow| microflow.name == name.to_s }
+          raise ArgumentError, "duplicate microflow: #{name}"
+        end
+
+        @microflows << MicroflowBuilder.build(
+          name,
+          returns:,
+          folder:,
+          &block
+        )
+      end
+
       def result
         Model::AppModule.new(
           name: @name,
           entities: @entities,
-          enumerations: @enumerations
+          enumerations: @enumerations,
+          microflows: @microflows
+        )
+      end
+    end
+
+    class MicroflowBuilder
+      def self.build(name, returns: nil, folder: nil, &block)
+        builder = new(name, returns, folder)
+        builder.instance_eval(&block) if block
+        builder.result
+      end
+
+      def initialize(name, returns, folder)
+        @name = name.to_s
+        @return_type = returns&.to_s
+        @folder = folder&.to_s
+        @parameters = []
+        @body = nil
+        @execute_roles = []
+      end
+
+      def parameter(name, type)
+        if @parameters.any? { |parameter| parameter.name == name.to_s }
+          raise ArgumentError, "duplicate microflow parameter: #{name}"
+        end
+
+        @parameters << Model::FlowParameter.new(name: name.to_s, type: type.to_s)
+      end
+
+      def body(source)
+        raise ArgumentError, "microflow body is already declared" if @body
+
+        @body = source.to_s.strip
+      end
+
+      def execute_role(role)
+        role = role.to_s
+        raise ArgumentError, "duplicate execute role: #{role}" if @execute_roles.include?(role)
+
+        @execute_roles << role
+      end
+
+      def result
+        raise ArgumentError, "microflow #{@name} requires a body" if @body.nil? || @body.empty?
+
+        Model::Microflow.new(
+          name: @name,
+          parameters: @parameters,
+          return_type: @return_type,
+          folder: @folder,
+          body: @body,
+          execute_roles: @execute_roles
         )
       end
     end

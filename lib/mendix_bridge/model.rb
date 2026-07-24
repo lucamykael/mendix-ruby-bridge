@@ -37,12 +37,39 @@ module MendixBridge
       end
     end
 
-    AppModule = Data.define(:name, :entities, :enumerations) do
+    FlowParameter = Data.define(:name, :type) do
+      def to_h
+        { name:, type: }
+      end
+    end
+
+    Microflow = Data.define(
+      :name,
+      :parameters,
+      :return_type,
+      :folder,
+      :body,
+      :execute_roles
+    ) do
+      def to_h
+        {
+          name:,
+          parameters: parameters.map(&:to_h),
+          return_type:,
+          folder:,
+          body:,
+          execute_roles:
+        }.compact
+      end
+    end
+
+    AppModule = Data.define(:name, :entities, :enumerations, :microflows) do
       def to_h
         {
           name:,
           entities: entities.map(&:to_h),
-          enumerations: enumerations.map(&:to_h)
+          enumerations: enumerations.map(&:to_h),
+          microflows: microflows.map(&:to_h)
         }
       end
     end
