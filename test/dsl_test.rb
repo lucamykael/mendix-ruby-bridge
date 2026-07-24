@@ -238,6 +238,87 @@ class DSLTest < Minitest::Test
     assert_equal ["CRM.ACT_Save"], operation.changes["microflow_calls"]
   end
 
+  def test_builds_generates_and_plans_security
+    model = MendixBridge.app("Example") do
+      project_security level: :production, demo_users: false
+      user_role "Support", module_roles: ["CRM.Support"]
+
+      modulo "CRM" do
+        module_role "Support", description: "Customer support"
+      end
+    end
+
+    mdl = MendixBridge.compile(model, format: :mdl)
+    assert_includes mdl,
+      "CREATE MODULE ROLE CRM.Support DESCRIPTION 'Customer support';"
+    assert_includes mdl, "CREATE USER ROLE Support (CRM.Support);"
+    assert_includes mdl, "ALTER PROJECT SECURITY LEVEL PRODUCTION;"
+    assert_includes mdl, "ALTER PROJECT SECURITY DEMO USERS OFF;"
+
+    skipped = MendixBridge.compile(
+      model,
+      format: :mdl,
+      skip_module_roles: ["CRM.Support"],
+      skip_user_roles: ["Support"]
+    )
+    refute_includes skipped, "CREATE MODULE ROLE"
+    refute_includes skipped, "CREATE USER ROLE"
+    assert_includes skipped, "ALTER PROJECT SECURITY LEVEL PRODUCTION;"
+
+    inventory = MendixBridge::Inventory.new(
+      [
+        { "label" => "CRM", "type" => "module", "qualifiedName" => "CRM" },
+        {
+          "label" => "Project Security",
+          "type" => "projectsecurity",
+          "qualifiedName" => "ProjectSecurity"
+        }
+      ],
+      details: {
+        "ProjectSecurity" => {
+          "parse_status" => "parsed",
+          "settings" => {
+            "SecurityLevel" => "Prototype",
+            "DemoUsersEnabled" => true
+          }
+        }
+      }
+    )
+    operations = MendixBridge::ChangePlanner.plan(model, inventory).operations
+      .to_h { |operation| [operation.name, operation] }
+    assert_equal "create", operations.fetch("CRM.Support").action
+    assert_equal "create", operations.fetch("Support").action
+    assert_equal "modify", operations.fetch("ProjectSecurity").action
+  end
+
+  def test_generates_entity_access_rules
+    model = MendixBridge.app("Example") do
+      modulo "CRM" do
+        entity "Customer" do
+          attribute "Name", :string
+          attribute "Secret", :string
+          access "CRM.Admin",
+            create: true,
+            delete: true,
+            read: :all,
+            write: %w[Name Secret]
+          access "CRM.User",
+            read: ["Name"],
+            write: ["Name"],
+            where: "[Owner = '[%CurrentUser%]']"
+        end
+      end
+    end
+
+    mdl = MendixBridge.compile(model, format: :mdl)
+    assert_includes mdl,
+      "GRANT CRM.Admin ON CRM.Customer " \
+      "(CREATE, DELETE, READ *, WRITE (Name, Secret));"
+    assert_includes mdl,
+      "GRANT CRM.User ON CRM.Customer " \
+      "(READ (Name), WRITE (Name)) WHERE '[Owner = ''[%CurrentUser%]'']';"
+  end
+
   def test_can_skip_an_existing_association
     model = MendixBridge.app("Example") do
       modulo "CRM" do

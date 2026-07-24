@@ -79,10 +79,46 @@ unless skipped_associations.empty?
   puts "Keeping existing associations: #{skipped_associations.join(', ')}"
 end
 
+existing_module_roles = model.modules.flat_map do |app_module|
+  output, error, status = Open3.capture3(
+    mxcli,
+    "-p", project_file,
+    "-c", "SHOW MODULE ROLES IN #{app_module.name};"
+  )
+  abort "Could not inspect module roles: #{error}" unless status.success?
+
+  output.scan(
+    /^\|\s+([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)\s+\|/
+  ).flatten
+end
+declared_module_roles = model.modules.flat_map do |app_module|
+  app_module.module_roles.map { |role| "#{app_module.name}.#{role.name}" }
+end
+skipped_module_roles = declared_module_roles & existing_module_roles
+
+user_role_output, user_role_error, user_role_status = Open3.capture3(
+  mxcli,
+  "-p", project_file,
+  "-c", "SHOW USER ROLES;"
+)
+abort "Could not inspect user roles: #{user_role_error}" unless user_role_status.success?
+existing_user_roles = user_role_output.scan(/^\|\s+([A-Za-z_][A-Za-z0-9_]*)\s+\|/).flatten
+declared_user_roles = model.user_roles.map(&:name)
+skipped_user_roles = declared_user_roles & existing_user_roles
+
+unless skipped_module_roles.empty?
+  puts "Keeping existing module roles: #{skipped_module_roles.join(', ')}"
+end
+unless skipped_user_roles.empty?
+  puts "Keeping existing user roles: #{skipped_user_roles.join(', ')}"
+end
+
 mdl = MendixBridge.compile(
   model,
   format: :mdl,
-  skip_associations: skipped_associations
+  skip_associations: skipped_associations,
+  skip_module_roles: skipped_module_roles,
+  skip_user_roles: skipped_user_roles
 )
 
 Tempfile.create(["mendix-ruby-bridge-", ".mdl"]) do |file|

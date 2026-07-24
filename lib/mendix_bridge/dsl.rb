@@ -31,6 +31,8 @@ module MendixBridge
         @name = name.to_s
         @version = version&.to_s
         @modules = []
+        @user_roles = []
+        @project_security = nil
       end
 
       def modulo(name, &block)
@@ -41,8 +43,42 @@ module MendixBridge
         add_module(name, &block)
       end
 
+      def user_role(name, module_roles:, manage_all_roles: false)
+        raise ArgumentError, "duplicate user role: #{name}" if
+          @user_roles.any? { |role| role.name == name.to_s }
+
+        roles = Array(module_roles).map(&:to_s)
+        raise ArgumentError, "user role #{name} requires module roles" if roles.empty?
+
+        @user_roles << Model::UserRole.new(
+          name: name.to_s,
+          module_roles: roles,
+          manage_all_roles:
+        )
+      end
+
+      def project_security(level:, demo_users: false)
+        raise ArgumentError, "project security is already declared" if @project_security
+
+        normalized_level = level.to_s.downcase
+        unless %w[off prototype production].include?(normalized_level)
+          raise ArgumentError, "security level must be off, prototype, or production"
+        end
+
+        @project_security = Model::ProjectSecurity.new(
+          level: normalized_level,
+          demo_users: !!demo_users
+        )
+      end
+
       def result
-        Model::App.new(name: @name, version: @version, modules: @modules)
+        Model::App.new(
+          name: @name,
+          version: @version,
+          modules: @modules,
+          user_roles: @user_roles,
+          project_security: @project_security
+        )
       end
 
       private
@@ -72,6 +108,7 @@ module MendixBridge
         @enumerations = []
         @microflows = []
         @pages = []
+        @module_roles = []
       end
 
       def entity(name, persistable: true, &block)
@@ -116,13 +153,24 @@ module MendixBridge
         )
       end
 
+      def module_role(name, description: nil)
+        raise ArgumentError, "duplicate module role: #{name}" if
+          @module_roles.any? { |role| role.name == name.to_s }
+
+        @module_roles << Model::ModuleRole.new(
+          name: name.to_s,
+          description: description&.to_s
+        )
+      end
+
       def result
         Model::AppModule.new(
           name: @name,
           entities: @entities,
           enumerations: @enumerations,
           microflows: @microflows,
-          pages: @pages
+          pages: @pages,
+          module_roles: @module_roles
         )
       end
     end
@@ -280,6 +328,7 @@ module MendixBridge
         @persistable = persistable
         @attributes = []
         @associations = []
+        @access_rules = []
       end
 
       def attribute(
@@ -335,12 +384,35 @@ module MendixBridge
         )
       end
 
+      def access(
+        role,
+        create: false,
+        delete: false,
+        read: [],
+        write: [],
+        where: nil
+      )
+        role = role.to_s
+        raise ArgumentError, "duplicate entity access role: #{role}" if
+          @access_rules.any? { |rule| rule.role == role }
+
+        @access_rules << Model::AccessRule.new(
+          role:,
+          create: !!create,
+          delete: !!delete,
+          read: access_attributes(read),
+          write: access_attributes(write),
+          xpath: where&.to_s
+        )
+      end
+
       def result
         Model::Entity.new(
           name: @name,
           persistable: @persistable,
           attributes: @attributes,
-          associations: @associations
+          associations: @associations,
+          access_rules: @access_rules
         )
       end
 
@@ -350,6 +422,12 @@ module MendixBridge
         return unless items.any? { |item| item.name == name.to_s }
 
         raise ArgumentError, "duplicate #{kind}: #{name}"
+      end
+
+      def access_attributes(value)
+        return "*" if value == :all || value == "*"
+
+        Array(value).map(&:to_s)
       end
     end
   end

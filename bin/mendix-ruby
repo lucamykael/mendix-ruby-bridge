@@ -229,7 +229,7 @@ when "plan"
         JSON.pretty_generate(operation.changes).each_line { |line| puts "  #{line}" }
       end
     end
-    puts "Preserved undeclared entities/associations: #{plan.preserved_undeclared}"
+    puts "Preserved undeclared managed elements: #{plan.preserved_undeclared}"
     puts "Summary: #{plan.counts.map { |action, count| "#{action}=#{count}" }.join(', ')}"
   end
 

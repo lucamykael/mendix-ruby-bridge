@@ -14,8 +14,18 @@ module MendixBridge
       "string" => "String"
     }.freeze
 
-    def self.generate(model, skip_associations: [])
-      new(model, skip_associations:).generate
+    def self.generate(
+      model,
+      skip_associations: [],
+      skip_module_roles: [],
+      skip_user_roles: []
+    )
+      new(
+        model,
+        skip_associations:,
+        skip_module_roles:,
+        skip_user_roles:
+      ).generate
     end
 
     def self.microflow_statement(app_module, microflow)
@@ -26,9 +36,16 @@ module MendixBridge
       new(nil).send(:page_statement, app_module, page)
     end
 
-    def initialize(model, skip_associations: [])
+    def initialize(
+      model,
+      skip_associations: [],
+      skip_module_roles: [],
+      skip_user_roles: []
+    )
       @model = model
       @skip_associations = skip_associations
+      @skip_module_roles = skip_module_roles
+      @skip_user_roles = skip_user_roles
     end
 
     def generate
@@ -40,6 +57,10 @@ module MendixBridge
           microflow_statement(app_module, microflow)
         end
         pages = app_module.pages.map { |page| page_statement(app_module, page) }
+        module_roles = app_module.module_roles.filter_map do |role|
+          name = "#{app_module.name}.#{role.name}"
+          module_role_statement(app_module, role) unless @skip_module_roles.include?(name)
+        end
         entities = app_module.entities.map { |entity| entity_statement(app_module, entity) }
         associations = app_module.entities.flat_map do |entity|
           entity.associations.map do |association|
@@ -51,9 +72,11 @@ module MendixBridge
           end.compact
         end
 
-        enumerations + entities + associations + microflows + pages
+        module_roles + enumerations + entities + associations + microflows + pages
       end
 
+      statements.concat(user_role_statements)
+      statements.concat(project_security_statements)
       statements.join("\n\n") << "\n"
     end
 
@@ -117,6 +140,35 @@ module MendixBridge
       grants.empty? ? statement : "#{statement}\n\n#{grants.join("\n")}"
     end
 
+    def module_role_statement(app_module, role)
+      statement = "CREATE MODULE ROLE #{qualified(app_module.name, role.name)}"
+      if role.description
+        statement << " DESCRIPTION '#{escape_string(role.description)}'"
+      end
+      "#{statement};"
+    end
+
+    def user_role_statements
+      @model.user_roles.filter_map do |role|
+        next if @skip_user_roles.include?(role.name)
+
+        management = role.manage_all_roles ? " MANAGE ALL ROLES" : ""
+        module_roles = role.module_roles.map { |name| qualified_reference(name) }
+        "CREATE USER ROLE #{identifier(role.name)} " \
+          "(#{module_roles.join(', ')})#{management};"
+      end
+    end
+
+    def project_security_statements
+      security = @model.project_security
+      return [] unless security
+
+      [
+        "ALTER PROJECT SECURITY LEVEL #{security.level.upcase};",
+        "ALTER PROJECT SECURITY DEMO USERS #{security.demo_users ? 'ON' : 'OFF'};"
+      ]
+    end
+
     def entity_statement(app_module, entity)
       persistence = entity.persistable ? "PERSISTENT" : "NON-PERSISTENT"
       qualified_name = qualified(app_module.name, entity.name)
@@ -126,9 +178,32 @@ module MendixBridge
           "#{constraints(attribute)}"
       end
 
-      "CREATE OR MODIFY #{persistence} ENTITY #{qualified_name} (\n" \
+      statement = "CREATE OR MODIFY #{persistence} ENTITY #{qualified_name} (\n" \
         "#{attributes.join(",\n")}\n" \
         ");"
+      grants = entity.access_rules.map do |rule|
+        entity_access_statement(qualified_name, rule)
+      end
+      grants.empty? ? statement : "#{statement}\n\n#{grants.join("\n")}"
+    end
+
+    def entity_access_statement(entity_name, rule)
+      permissions = []
+      permissions << "CREATE" if rule.create
+      permissions << "DELETE" if rule.delete
+      permissions << "READ #{access_attribute_list(rule.read)}" unless rule.read.empty?
+      permissions << "WRITE #{access_attribute_list(rule.write)}" unless rule.write.empty?
+      raise ValidationError, "entity access rule requires at least one permission" if permissions.empty?
+
+      xpath = rule.xpath ? " WHERE '#{escape_string(rule.xpath)}'" : ""
+      "GRANT #{qualified_reference(rule.role)} ON #{entity_name} " \
+        "(#{permissions.join(', ')})#{xpath};"
+    end
+
+    def access_attribute_list(value)
+      return "*" if value == "*"
+
+      "(#{value.map { |name| identifier(name) }.join(', ')})"
     end
 
     def association_statement(app_module, entity, association)

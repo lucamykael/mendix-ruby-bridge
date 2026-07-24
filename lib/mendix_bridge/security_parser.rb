@@ -28,6 +28,9 @@ module MendixBridge
       def parse_module_role(description)
         mdl = description.fetch("mdl")
         {
+          "description" => mdl[
+            /\bmodule\s+role\s+[\w.]+\s+description\s+'((?:''|[^'])*)'/i, 1
+          ]&.gsub("''", "'"),
           "included_in_user_roles" => mdl[
             /--\s*Included in user roles:\s*(.+)$/i, 1
           ]&.split(",")&.map(&:strip) || [],

@@ -14,13 +14,33 @@ module MendixBridge
       end
     end
 
-    Entity = Data.define(:name, :persistable, :attributes, :associations) do
+    AccessRule = Data.define(:role, :create, :delete, :read, :write, :xpath) do
+      def to_h
+        {
+          role:,
+          create:,
+          delete:,
+          read:,
+          write:,
+          xpath:
+        }.compact
+      end
+    end
+
+    Entity = Data.define(
+      :name,
+      :persistable,
+      :attributes,
+      :associations,
+      :access_rules
+    ) do
       def to_h
         {
           name:,
           persistable:,
           attributes: attributes.map(&:to_h),
-          associations: associations.map(&:to_h)
+          associations: associations.map(&:to_h),
+          access_rules: access_rules.map(&:to_h)
         }
       end
     end
@@ -85,24 +105,52 @@ module MendixBridge
       end
     end
 
-    AppModule = Data.define(:name, :entities, :enumerations, :microflows, :pages) do
+    ModuleRole = Data.define(:name, :description) do
+      def to_h
+        { name:, description: }.compact
+      end
+    end
+
+    UserRole = Data.define(:name, :module_roles, :manage_all_roles) do
+      def to_h
+        { name:, module_roles:, manage_all_roles: }
+      end
+    end
+
+    ProjectSecurity = Data.define(:level, :demo_users) do
+      def to_h
+        { level:, demo_users: }
+      end
+    end
+
+    AppModule = Data.define(
+      :name,
+      :entities,
+      :enumerations,
+      :microflows,
+      :pages,
+      :module_roles
+    ) do
       def to_h
         {
           name:,
           entities: entities.map(&:to_h),
           enumerations: enumerations.map(&:to_h),
           microflows: microflows.map(&:to_h),
-          pages: pages.map(&:to_h)
+          pages: pages.map(&:to_h),
+          module_roles: module_roles.map(&:to_h)
         }
       end
     end
 
-    App = Data.define(:name, :version, :modules) do
+    App = Data.define(:name, :version, :modules, :user_roles, :project_security) do
       def to_h
         {
           schema_version: 1,
           app: { name:, version: }.compact,
-          modules: modules.map(&:to_h)
+          modules: modules.map(&:to_h),
+          user_roles: user_roles.map(&:to_h),
+          project_security: project_security&.to_h
         }
       end
     end
