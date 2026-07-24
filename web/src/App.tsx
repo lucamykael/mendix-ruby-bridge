@@ -4,9 +4,9 @@ import Canvas from "./components/Canvas";
 import Detail from "./components/Detail";
 import Marketplace from "./components/Marketplace";
 import Toolbox from "./components/Toolbox";
-import { loadInventory } from "./model/data";
+import { loadHealth, loadInventory } from "./model/data";
 import { collectAssocs } from "./model/er";
-import type { Inventory, TreeNode } from "./model/types";
+import type { BackendHealth, Inventory, TreeNode } from "./model/types";
 import "./themes.css";
 import "./App.css";
 
@@ -31,12 +31,14 @@ function orderModules(tree: TreeNode[]): TreeNode[] {
 export default function App() {
   const [inv, setInv] = useState<Inventory | null>(null);
   const [error, setError] = useState<string>();
+  const [health, setHealth] = useState<BackendHealth>();
   const [sel, setSel] = useState<Selection>();
   const [view, setView] = useState<View>("explorer");
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? "studio-pro");
 
   useEffect(() => {
     loadInventory().then(setInv).catch((e) => setError(String(e)));
+    loadHealth().then(setHealth).catch(() => setHealth(undefined));
   }, []);
 
   useEffect(() => {
@@ -65,6 +67,8 @@ export default function App() {
 
   const meta = inv.meta;
   const detail = sel ? inv.details[sel.qn] : undefined;
+  const incoming = sel ? inv.dependencies.edges.filter((edge) => edge.to === sel.qn) : [];
+  const outgoing = sel ? inv.dependencies.edges.filter((edge) => edge.from === sel.qn) : [];
   const showToolbox = view === "explorer";
 
   return (
@@ -97,8 +101,8 @@ export default function App() {
             {!sel && <p className="empty pad">Select an element to explore it.</p>}
             {sel && detail && (
               <>
-                <Canvas selection={sel} details={inv.details} assocs={assocs} onSelect={selectByQn} />
-                <Detail selection={sel} detail={detail} onSelect={selectByQn} />
+                <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
+                <Detail selection={sel} detail={detail} incoming={incoming} outgoing={outgoing} onSelect={selectByQn} />
               </>
             )}
           </main>
@@ -107,10 +111,11 @@ export default function App() {
       )}
 
       <footer className="statusbar">
-        <span>Ready</span>
+        <span>{health ? `Backend v${health.version}` : "Backend unavailable"}</span>
         <span className="spacer" />
         {sel && <span>{sel.type} · {sel.qn}</span>}
         <span className="sb-meta">{meta.element_count ? `${meta.element_count} elements` : ""}</span>
+        <span className="sb-meta">{`${inv.dependencies.edges.length} dependencies`}</span>
       </footer>
     </div>
   );

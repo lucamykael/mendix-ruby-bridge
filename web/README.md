@@ -1,10 +1,10 @@
 # Mendix Bridge — Web frontend
 
-React + Vite SPA for exploring (and, later, editing) an imported Mendix model.
+React + Vite SPA for exploring an imported Mendix model.
 It reads the inventory produced by `mendix-ruby import` and renders it with an
 interactive, node-based canvas.
 
-## Status (phase 1 — read-only)
+## Backend integration
 
 - **Tree** of modules → folders → elements, with filter and a "Pages" toggle.
 - **Interactive canvas** ([React Flow](https://reactflow.dev)) — nodes are
@@ -14,29 +14,36 @@ interactive, node-based canvas.
   - entities as a **domain (ER) neighbourhood** (centre entity + directly
     associated entities); neighbours are clickable to navigate.
 - **Detail panel** with the element's fields, tables and original MDL.
+- **Dependency navigation** from `inventory/dependencies.json`.
+- **Persisted canvas positions** in the Ruby inventory sidecar
+  `inventory/ui-layouts.json`. This does not modify the source `.mpr`.
+- **Marketplace browsing** through `mxcli`. Installation remains disabled in
+  the viewer and must use the guarded CLI/Git workflow.
 
 Parsing/model logic lives in `src/model/` (`flow.ts`, `er.ts`, `types.ts`),
 decoupled from the UI so it can be reused when the backend round-trips edits
 back into the model/code.
 
-## Run (dev)
+## Run
 
-The app fetches the inventory from `/inventory/*.json`. For now that data is
-served statically from `public/inventory/` (git-ignored). Populate it from an
-imported project, e.g.:
+Build the frontend and start the integrated Ruby server:
 
 ```sh
-cp ../ruby-bridge-sandbox-inventory/inventory/*.json public/inventory/
-cp ../ruby-bridge-sandbox-inventory/mendix-project.json public/inventory/
-npm install
+npm ci
+npm run build
+cd ..
+bin/mendix-ruby serve ../ruby-bridge-sandbox-inventory
+```
+
+Open `http://127.0.0.1:4567`. During frontend development, keep the Ruby server
+running and start Vite in another terminal:
+
+```sh
+bin/mendix-ruby serve ../ruby-bridge-sandbox-inventory
+cd web
+npm ci
 npm run dev
 ```
 
-Later this becomes an HTTP API served by the Ruby bridge, so drag-and-drop and
-edits persist back to the `.mpr` via the existing plan/apply pipeline.
-
-## Roadmap
-
-1. Read-only explorer (this). 2. Marketplace browse (`mxcli marketplace`).
-3. Drag-and-drop + write-back (`@position`/edits → MDL apply). 4. Page layout
-preview and deeper editing.
+Vite proxies `/inventory` and `/api` to `http://127.0.0.1:4567`. Override that
+target with `VITE_BACKEND_URL`.

@@ -19,6 +19,7 @@ Gem::Specification.new do |spec|
     "lib/**/*.rb",
     "bin/{mendix-ruby,mendix-git,git-mendix,mendix-apply}",
     "bin/{mxcli,setup-tools}",
+    "web/dist/**/*",
     ".mxcli-version",
     "README.md",
     "LICENSE"
@@ -30,4 +31,5 @@ Gem::Specification.new do |spec|
 
   spec.add_development_dependency "minitest", ">= 5.0", "< 7.0"
   spec.add_development_dependency "rake", ">= 13.0", "< 14.0"
+  spec.add_runtime_dependency "webrick", ">= 1.9", "< 2.0"
 end

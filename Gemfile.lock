@@ -2,6 +2,7 @@ PATH
   remote: .
   specs:
     mendix-ruby-bridge (0.1.0)
+      webrick (>= 1.9, < 2.0)
 
 GEM
   remote: https://rubygems.org/
@@ -12,6 +13,7 @@ GEM
       prism (~> 1.5)
     prism (1.9.0)
     rake (13.4.2)
+    webrick (1.9.2)
 
 PLATFORMS
   ruby
@@ -28,6 +30,7 @@ CHECKSUMS
   minitest (6.0.6) sha256=153ea36d1d987a62942382b61075745042a2b3123b1cd48f4c3675af9cc7d6f1
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
   rake (13.4.2) sha256=cb825b2bd5f1f8e91ca37bddb4b9aaf345551b4731da62949be002fa89283701
+  webrick (1.9.2) sha256=beb4a15fc474defed24a3bda4ffd88a490d517c9e4e6118c3edce59e45864131
 
 BUNDLED WITH
   4.0.15

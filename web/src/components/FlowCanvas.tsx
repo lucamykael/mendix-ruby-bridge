@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, useReactFlow,
+  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
   useNodesState, useEdgesState, type Node, type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -8,77 +8,68 @@ import { flowGraph } from "../model/flow";
 import { saveLayout, type NodePosition } from "../model/api";
 import { nodeTypes } from "./nodes";
 
-/**
- * Editable microflow/nanoflow canvas. Existing nodes are draggable; dropping a
- * Toolbox activity adds a new node at the cursor. Both mark the layout dirty and
- * "Save layout" POSTs the positions to the backend (mocked until it exists).
- */
-function FlowInner({ qn, mdl }: { qn: string; mdl: string }) {
+interface Props {
+  qn: string;
+  mdl: string;
+  savedPositions?: NodePosition[];
+}
+
+function withSavedPositions(nodes: Node[], positions: NodePosition[] = []): Node[] {
+  const saved = new Map(positions.map((position) => [position.id, position]));
+  return nodes.map((node) => {
+    const position = saved.get(node.id);
+    return position
+      ? { ...node, position: { x: position.x, y: position.y } }
+      : node;
+  });
+}
+
+function PersistedFlowInner({ qn, mdl, savedPositions }: Props) {
   const graph = useMemo(() => flowGraph(mdl), [mdl]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(graph?.nodes ?? []);
+  const initial = useMemo(
+    () => withSavedPositions(graph?.nodes ?? [], savedPositions),
+    [graph, savedPositions],
+  );
+  const [nodes, setNodes, onNodesChange] = useNodesState(initial);
   const [edges, setEdges] = useEdgesState(graph?.edges ?? []);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<string>();
-  const { screenToFlowPosition } = useReactFlow();
 
   useEffect(() => {
-    if (graph) {
-      setNodes(graph.nodes);
-      setEdges(graph.edges);
-      setDirty(false);
-      setStatus(undefined);
-    }
-  }, [graph, setNodes, setEdges]);
+    setNodes(initial);
+    setEdges(graph?.edges ?? []);
+    setDirty(false);
+    setStatus(undefined);
+  }, [graph, initial, setNodes, setEdges]);
 
   const handleChanges = (changes: NodeChange[]) => {
     onNodesChange(changes);
-    if (changes.some((c) => c.type === "position")) setDirty(true);
-  };
-
-  const onDragOver = (e: DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-  };
-
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault();
-    const raw = e.dataTransfer.getData("application/mrb-item");
-    if (!raw) return;
-    const item = JSON.parse(raw) as { label: string };
-    const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-    const node: Node = {
-      id: `new-${Date.now()}`,
-      type: "activity",
-      position,
-      data: { label: item.label, kind: "action" },
-    };
-    setNodes((nds) => [...nds, node]);
-    setDirty(true);
+    if (changes.some((change) => change.type === "position")) setDirty(true);
   };
 
   const onSave = async () => {
-    const positions: NodePosition[] = nodes.map((n) => ({
-      id: n.id,
-      label: String((n.data as { label?: string }).label ?? ""),
-      x: n.position.x,
-      y: n.position.y,
+    const positions: NodePosition[] = nodes.map((node) => ({
+      id: node.id,
+      label: String((node.data as { label?: string }).label ?? ""),
+      x: node.position.x,
+      y: node.position.y,
     }));
     const { data, mocked } = await saveLayout(qn, positions);
-    setStatus((mocked ? "offline — " : "") + (data.ok ? "layout saved" : "save failed"));
-    setDirty(false);
+    setStatus((mocked ? "offline — " : "") + data.message);
+    if (data.ok) setDirty(false);
   };
 
   return (
     <div className="canvas-wrap">
       <div className="canvas-toolbar">
-        <span className="hint">Drag blocks to rearrange · drop from the Toolbox to add</span>
+        <span className="hint">Drag blocks to rearrange · positions persist in the Ruby inventory</span>
         <span className="spacer" />
         {status && <span className="muted">{status}</span>}
         <button className="w-btn" disabled={!dirty} onClick={onSave}>
           Save layout
         </button>
       </div>
-      <div className="canvas" onDrop={onDrop} onDragOver={onDragOver}>
+      <div className="canvas">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -97,10 +88,10 @@ function FlowInner({ qn, mdl }: { qn: string; mdl: string }) {
   );
 }
 
-export default function FlowCanvas(props: { qn: string; mdl: string }) {
+export default function FlowCanvas(props: Props) {
   return (
     <ReactFlowProvider>
-      <FlowInner {...props} />
+      <PersistedFlowInner {...props} />
     </ReactFlowProvider>
   );
 }

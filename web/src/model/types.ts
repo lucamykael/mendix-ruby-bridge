@@ -64,8 +64,38 @@ export interface ProjectMeta {
   types?: Record<string, number>;
 }
 
+export interface DependencyEdge {
+  from: string;
+  to: string;
+  kind: string;
+  path: string;
+}
+
+export interface DependencyGraph {
+  schema_version: number;
+  nodes: number;
+  edges: DependencyEdge[];
+}
+
+export interface NodePosition {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+}
+
+export interface BackendHealth {
+  ok: boolean;
+  version: string;
+  element_count?: number;
+  imported_at?: string;
+  capabilities: Record<string, boolean>;
+}
+
 export interface Inventory {
   tree: TreeNode[];
   details: Record<string, ElementDetail>;
   meta: ProjectMeta;
+  dependencies: DependencyGraph;
+  layouts: Record<string, NodePosition[]>;
 }

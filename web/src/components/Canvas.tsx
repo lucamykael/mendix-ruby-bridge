@@ -3,7 +3,7 @@ import { ReactFlow, Background, Controls, MiniMap } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { Assoc } from "../model/er";
 import { erGraph } from "../model/er";
-import type { ElementDetail } from "../model/types";
+import type { ElementDetail, NodePosition } from "../model/types";
 import type { Selection } from "./Tree";
 import PageView from "./PageView";
 import FlowCanvas from "./FlowCanvas";
@@ -12,6 +12,7 @@ interface Props {
   selection: Selection;
   details: Record<string, ElementDetail>;
   assocs: Assoc[];
+  layouts: Record<string, NodePosition[]>;
   onSelect: (qn: string) => void;
 }
 
@@ -21,7 +22,7 @@ interface Props {
  * - entity             -> domain ER neighbourhood (clickable navigation)
  * - page               -> layout preview
  */
-export default function Canvas({ selection, details, assocs, onSelect }: Props) {
+export default function Canvas({ selection, details, assocs, layouts, onSelect }: Props) {
   const { type, qn } = selection;
   const detail = details[qn];
 
@@ -31,7 +32,8 @@ export default function Canvas({ selection, details, assocs, onSelect }: Props) 
   );
 
   if (type === "page" && detail) return <PageView selection={selection} detail={detail} onSelect={onSelect} />;
-  if ((type === "microflow" || type === "nanoflow") && detail?.mdl) return <FlowCanvas qn={qn} mdl={detail.mdl} />;
+  if ((type === "microflow" || type === "nanoflow") && detail?.mdl)
+    return <FlowCanvas qn={qn} mdl={detail.mdl} savedPositions={layouts[qn]} />;
 
   if (er) {
     return (

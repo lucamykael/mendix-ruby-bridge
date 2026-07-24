@@ -1,18 +1,38 @@
-// Loads the imported inventory. For now it reads the static JSON copied into
-// /public/inventory; later this becomes an HTTP API served by the Ruby bridge,
-// so writes (drag-and-drop, edits) round-trip back into the model/code.
+// Loads the read-only model inventory and viewer-side layouts from the Ruby backend.
 
-import type { Inventory, ElementDetail, ProjectMeta, TreeNode } from "./types";
+import type {
+  BackendHealth,
+  DependencyGraph,
+  ElementDetail,
+  Inventory,
+  NodePosition,
+  ProjectMeta,
+  TreeNode,
+} from "./types";
 
 const BASE = "/inventory";
 
+async function json<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText} — ${url}`);
+  return response.json() as Promise<T>;
+}
+
 export async function loadInventory(): Promise<Inventory> {
-  const [tree, details, meta] = await Promise.all([
-    fetch(`${BASE}/project-tree.json`).then((r) => r.json() as Promise<TreeNode[]>),
-    fetch(`${BASE}/element-details.json`).then((r) => r.json() as Promise<Record<string, ElementDetail>>),
-    fetch(`${BASE}/mendix-project.json`)
-      .then((r) => r.json() as Promise<ProjectMeta>)
-      .catch(() => ({}) as ProjectMeta),
+  const [tree, details, meta, dependencies, layouts] = await Promise.all([
+    json<TreeNode[]>(`${BASE}/project-tree.json`),
+    json<Record<string, ElementDetail>>(`${BASE}/element-details.json`),
+    json<ProjectMeta>(`${BASE}/mendix-project.json`).catch(() => ({})),
+    json<DependencyGraph>(`${BASE}/dependencies.json`).catch(() => ({
+      schema_version: 1,
+      nodes: 0,
+      edges: [],
+    })),
+    json<Record<string, NodePosition[]>>(`${BASE}/ui-layouts.json`).catch(() => ({})),
   ]);
-  return { tree, details, meta };
+  return { tree, details, meta, dependencies, layouts };
+}
+
+export function loadHealth(): Promise<BackendHealth> {
+  return json<BackendHealth>("/api/health");
 }

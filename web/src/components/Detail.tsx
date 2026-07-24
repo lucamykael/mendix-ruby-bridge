@@ -1,9 +1,11 @@
-import type { ElementDetail } from "../model/types";
+import type { DependencyEdge, ElementDetail } from "../model/types";
 import type { Selection } from "./Tree";
 
 interface Props {
   selection: Selection;
   detail: ElementDetail;
+  incoming: DependencyEdge[];
+  outgoing: DependencyEdge[];
   onSelect: (qn: string) => void;
 }
 
@@ -63,7 +65,43 @@ function ArrayBlock({ arr, onSelect }: { arr: unknown[]; onSelect: (qn: string) 
   );
 }
 
-export default function Detail({ selection, detail, onSelect }: Props) {
+function Dependencies({
+  incoming,
+  outgoing,
+  onSelect,
+}: {
+  incoming: DependencyEdge[];
+  outgoing: DependencyEdge[];
+  onSelect: (qn: string) => void;
+}) {
+  const rows = [
+    ...outgoing.map((edge) => ({ direction: "uses", target: edge.to, edge })),
+    ...incoming.map((edge) => ({ direction: "used by", target: edge.from, edge })),
+  ];
+  if (!rows.length) return null;
+  return (
+    <section className="block">
+      <h3>dependencies</h3>
+      <div className="body">
+        <table>
+          <thead><tr><th>direction</th><th>element</th><th>kind</th><th>path</th></tr></thead>
+          <tbody>
+            {rows.map(({ direction, target, edge }, index) => (
+              <tr key={`${direction}-${target}-${edge.path}-${index}`}>
+                <td>{direction}</td>
+                <td><Value v={target} onSelect={onSelect} /></td>
+                <td>{edge.kind}</td>
+                <td><code>{edge.path}</code></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+export default function Detail({ selection, detail, incoming, outgoing, onSelect }: Props) {
   const keys = Object.keys(detail)
     .filter((k) => k !== "parse_status" && k !== "mdl")
     .sort((a, b) => {
@@ -79,6 +117,7 @@ export default function Detail({ selection, detail, onSelect }: Props) {
         {selection.type} · {selection.qn}
         {detail.parse_status && <span className={"pill " + (detail.parse_status === "parsed" ? "ok" : "warn")}>{detail.parse_status}</span>}
       </div>
+      <Dependencies incoming={incoming} outgoing={outgoing} onSelect={onSelect} />
       {keys.map((k) => {
         const v = detail[k];
         return (
