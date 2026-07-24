@@ -151,3 +151,17 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
   background: var(--accent); color: #fff; }
 .statusbar .spacer { flex: 1; }
 .statusbar .sb-meta { opacity: .85; }
+
+/* ---- responsiveness ---- */
+@media (max-width: 1200px) {
+  aside { width: 264px; }
+  .toolbox { width: 172px; }
+}
+@media (max-width: 900px) {
+  aside { width: 220px; }
+  .toolbox { display: none; }
+}
+@media (max-width: 640px) {
+  aside { width: 180px; }
+  header .app-name { display: none; }
+}
