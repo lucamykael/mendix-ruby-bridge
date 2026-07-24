@@ -19,6 +19,8 @@ require_relative "mendix_bridge/presenter"
 require_relative "mendix_bridge/change_planner"
 require_relative "mendix_bridge/importer"
 require_relative "mendix_bridge/project_creator"
+require_relative "mendix_bridge/migration"
+require_relative "mendix_bridge/migration_executor"
 require_relative "mendix_bridge/html_viewer"
 require_relative "mendix_bridge/git_workflow"
 
@@ -71,6 +73,20 @@ module MendixBridge
       end
 
       validate!(model)
+    end
+
+    def migration(name, &block)
+      Migration::Builder.build(name, &block)
+    end
+
+    def load_migration(path)
+      source = File.read(path)
+      plan = eval(source, TOPLEVEL_BINDING, path) # rubocop:disable Security/Eval
+      unless plan.is_a?(Migration::Plan)
+        raise ArgumentError, "#{path} must return a MendixBridge migration"
+      end
+
+      plan
     end
 
     private

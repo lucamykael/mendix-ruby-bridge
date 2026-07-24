@@ -186,6 +186,52 @@ class DSLTest < Minitest::Test
     end
   end
 
+  def test_builds_explicit_destructive_migration
+    migration = MendixBridge.migration("remove-legacy-customer-data") do
+      rename :entity, "CRM.Customer", to: "Client"
+      rename_attribute "CRM.Client", "Email", to: "EmailAddress"
+      drop_attribute "CRM.Client", "Legacy"
+      rename_enumeration_value "CRM.Status", "Waiting", to: "Pending"
+      drop_enumeration_value "CRM.Status", "Obsolete"
+      revoke_access "CRM.Client", role: "CRM.LegacyUser"
+      drop :microflow, "CRM.ACT_Legacy"
+    end
+
+    assert_equal 7, migration.operations.length
+    renames = MendixBridge::Migration::Generator.rename_operations(migration)
+    assert_equal "CRM.Customer", renames.first.name
+    assert_equal "Client", renames.first.options["to"]
+
+    mdl = MendixBridge::Migration::Generator.mdl(migration)
+    assert_includes mdl,
+      "ALTER ENTITY CRM.Client RENAME ATTRIBUTE Email TO EmailAddress;"
+    assert_includes mdl, "ALTER ENTITY CRM.Client DROP ATTRIBUTE Legacy;"
+    assert_includes mdl,
+      "ALTER ENUMERATION CRM.Status RENAME VALUE Waiting TO Pending;"
+    assert_includes mdl, "ALTER ENUMERATION CRM.Status DROP VALUE Obsolete;"
+    assert_includes mdl, "REVOKE CRM.LegacyUser ON CRM.Client;"
+    assert_includes mdl, "DROP MICROFLOW CRM.ACT_Legacy;"
+    refute_includes mdl, "CRM.Customer"
+  end
+
+  def test_rejects_unknown_migration_operation_types
+    error = assert_raises(ArgumentError) do
+      MendixBridge.migration("bad") { drop :database, "CRM.Data" }
+    end
+
+    assert_match "unsupported drop type :database", error.message
+  end
+
+  def test_rejects_invalid_migration_identifiers
+    error = assert_raises(ArgumentError) do
+      MendixBridge.migration("unsafe") do
+        drop :entity, "CRM.Customer; DROP MODULE CRM"
+      end
+    end
+
+    assert_match "expected qualified Mendix name", error.message
+  end
+
   def test_rejects_empty_or_duplicate_enumeration_values
     assert_raises(ArgumentError) do
       MendixBridge.app("Example") do
