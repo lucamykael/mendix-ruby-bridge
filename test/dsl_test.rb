@@ -232,6 +232,67 @@ class DSLTest < Minitest::Test
     assert_match "expected qualified Mendix name", error.message
   end
 
+  def test_builds_and_queries_cross_reference_dependency_index
+    inventory = MendixBridge::Inventory.new(
+      [
+        {
+          "label" => "CRM",
+          "type" => "module",
+          "qualifiedName" => "CRM",
+          "children" => [
+            {
+              "label" => "Customer",
+              "type" => "entity",
+              "qualifiedName" => "CRM.Customer"
+            },
+            {
+              "label" => "ACT_Save",
+              "type" => "microflow",
+              "qualifiedName" => "CRM.ACT_Save"
+            },
+            {
+              "label" => "SUB_Validate",
+              "type" => "microflow",
+              "qualifiedName" => "CRM.SUB_Validate"
+            },
+            {
+              "label" => "Customer_Edit",
+              "type" => "page",
+              "qualifiedName" => "CRM.Customer_Edit"
+            }
+          ]
+        }
+      ],
+      details: {
+        "CRM.Customer" => {
+          "generalization" => "System.User",
+          "mdl" => "create entity CRM.Customer;"
+        },
+        "CRM.ACT_Save" => {
+          "parameters" => [{ "name" => "Customer", "type" => "CRM.Customer" }],
+          "calls" => ["CRM.SUB_Validate"],
+          "mdl" => "call microflow CRM.SUB_Validate;"
+        },
+        "CRM.SUB_Validate" => {
+          "mdl" => "retrieve CRM.Customer;"
+        },
+        "CRM.Customer_Edit" => {
+          "microflow_calls" => ["CRM.ACT_Save"],
+          "mdl" => "Action: microflow CRM.ACT_Save"
+        }
+      }
+    )
+
+    index = MendixBridge::DependencyIndex.new(inventory)
+
+    assert_equal ["CRM.SUB_Validate"], index.callees("CRM.ACT_Save").map(&:to).uniq
+    assert_equal ["CRM.ACT_Save"], index.callers("CRM.SUB_Validate").map(&:from).uniq
+    assert_includes index.dependencies("CRM.ACT_Save").map(&:to), "CRM.Customer"
+    assert_includes index.impact("CRM.Customer").map(&:from), "CRM.ACT_Save"
+    assert_includes index.impact("CRM.Customer").map(&:from), "CRM.Customer_Edit"
+    assert_equal 5, index.to_h[:nodes]
+  end
+
   def test_rejects_empty_or_duplicate_enumeration_values
     assert_raises(ArgumentError) do
       MendixBridge.app("Example") do

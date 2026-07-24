@@ -8,6 +8,75 @@ require_relative "../lib/mendix_bridge"
 command = ARGV.shift
 
 case command
+when "deps"
+  options = { direction: "both", transitive: false, json: false }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby deps ELEMENT [IMPORTED_DIR] [options]"
+    opts.on(
+      "-d",
+      "--direction DIRECTION",
+      %w[both dependencies dependents callers callees impact],
+      "both, dependencies, dependents, callers, callees, or impact"
+    ) { |direction| options[:direction] = direction }
+    opts.on("--transitive", "Traverse the complete dependency graph") do
+      options[:transitive] = true
+    end
+    opts.on("--json", "Print machine-readable JSON") { options[:json] = true }
+  end
+  parser.parse!
+  name = ARGV.shift
+  imported_dir = File.expand_path(ARGV.shift || ".")
+  unless name && ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  snapshot_file = File.join(imported_dir, "inventory", "project-tree.json")
+  details_file = File.join(imported_dir, "inventory", "element-details.json")
+  dependencies_file = File.join(imported_dir, "inventory", "dependencies.json")
+  abort "Not an imported Mendix Ruby project: #{imported_dir}" unless
+    File.file?(snapshot_file)
+
+  inventory = MendixBridge::Inventory.load(
+    snapshot_file,
+    details_path: details_file
+  )
+  index = if File.file?(dependencies_file)
+    MendixBridge::DependencyIndex.load(dependencies_file, inventory:)
+  else
+    MendixBridge::DependencyIndex.new(inventory)
+  end
+  result = case options.fetch(:direction)
+  when "dependencies"
+    { "dependencies" => index.dependencies(name, transitive: options[:transitive]) }
+  when "dependents"
+    { "dependents" => index.dependents(name, transitive: options[:transitive]) }
+  when "callers"
+    { "callers" => index.callers(name, transitive: options[:transitive]) }
+  when "callees"
+    { "callees" => index.callees(name, transitive: options[:transitive]) }
+  when "impact"
+    { "impact" => index.impact(name) }
+  else
+    {
+      "dependencies" => index.dependencies(name, transitive: options[:transitive]),
+      "dependents" => index.dependents(name, transitive: options[:transitive])
+    }
+  end
+  result.transform_values! { |edges| edges.map(&:to_h) }
+
+  if options[:json]
+    puts JSON.pretty_generate({ "element" => name }.merge(result))
+  else
+    puts "Dependencies for #{name}:"
+    result.each do |direction, edges|
+      puts "#{direction.capitalize} (#{edges.length}):"
+      edges.each do |edge|
+        puts "  #{edge.fetch(:from)} -> #{edge.fetch(:to)} " \
+          "[#{edge.fetch(:kind)} via #{edge.fetch(:path)}]"
+      end
+    end
+  end
 when "migrate"
   options = { studio_closed: false, dry_run: false }
   parser = OptionParser.new do |opts|
@@ -385,6 +454,7 @@ when "view"
 else
   warn <<~USAGE
     Usage:
+      mendix-ruby deps ELEMENT [IMPORTED_DIR] [options]
       mendix-ruby migrate MIGRATION.rb --project APP.mpr [--dry-run]
       mendix-ruby rollback BACKUP_DIR --project APP.mpr
       mendix-ruby new APP.rb --output DIR --version VERSION [--no-git]
