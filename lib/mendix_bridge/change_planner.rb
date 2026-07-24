@@ -42,7 +42,7 @@ module MendixBridge
     def plan
       operations = @model.modules.flat_map { |app_module| plan_module(app_module) }
       declared = operations.map { |operation| "#{operation.type}:#{operation.name}" }.to_set
-      managed_types = %w[entity association]
+      managed_types = %w[entity association enumeration]
       preserved = @inventory.elements.count do |element|
         managed_types.include?(element.type) &&
           !declared.include?("#{element.type}:#{element.qualified_name}")
@@ -66,11 +66,77 @@ module MendixBridge
         ]
       end
 
-      app_module.entities.flat_map do |entity|
+      enumeration_operations = app_module.enumerations.map do |enumeration|
+        plan_enumeration(app_module, enumeration)
+      end
+      entity_operations = app_module.entities.flat_map do |entity|
         [plan_entity(app_module, entity), *entity.associations.map do |association|
           plan_association(app_module, entity, association)
         end]
       end
+      enumeration_operations + entity_operations
+    end
+
+    def plan_enumeration(app_module, enumeration)
+      name = "#{app_module.name}.#{enumeration.name}"
+      existing = @inventory.find(name)
+      desired = {
+        "folder" => enumeration.folder,
+        "values" => enumeration.values.map do |value|
+          { "name" => value.name, "caption" => value.caption }
+        end
+      }.compact
+      return Operation.new(
+        action: "create",
+        type: "enumeration",
+        name:,
+        changes: desired,
+        reason: nil
+      ) unless existing
+
+      details = existing.details
+      unless existing.type == "enumeration" && details&.fetch("parse_status", nil) == "parsed"
+        return Operation.new(
+          action: "blocked",
+          type: "enumeration",
+          name:,
+          changes: nil,
+          reason: "existing enumeration does not have parsed semantic details"
+        )
+      end
+
+      current = {
+        "folder" => details["folder"],
+        "values" => details.fetch("values", [])
+      }.compact
+      return Operation.new(
+        action: "keep",
+        type: "enumeration",
+        name:,
+        changes: nil,
+        reason: nil
+      ) if current == desired
+
+      current_names = current.fetch("values").map { |value| value.fetch("name") }
+      desired_names = desired.fetch("values").map { |value| value.fetch("name") }
+      removed = current_names - desired_names
+      if removed.any?
+        return Operation.new(
+          action: "blocked",
+          type: "enumeration",
+          name:,
+          changes: { "from" => current, "to" => desired, "removed_values" => removed },
+          reason: "enumeration value removal requires explicit migration support"
+        )
+      end
+
+      Operation.new(
+        action: "modify",
+        type: "enumeration",
+        name:,
+        changes: { "from" => current, "to" => desired },
+        reason: nil
+      )
     end
 
     def plan_entity(app_module, entity)

@@ -25,6 +25,9 @@ module MendixBridge
 
     def generate
       statements = @model.modules.flat_map do |app_module|
+        enumerations = app_module.enumerations.map do |enumeration|
+          enumeration_statement(app_module, enumeration)
+        end
         entities = app_module.entities.map { |entity| entity_statement(app_module, entity) }
         associations = app_module.entities.flat_map do |entity|
           entity.associations.map do |association|
@@ -36,13 +39,28 @@ module MendixBridge
           end.compact
         end
 
-        entities + associations
+        enumerations + entities + associations
       end
 
       statements.join("\n\n") << "\n"
     end
 
     private
+
+    def enumeration_statement(app_module, enumeration)
+      values = enumeration.values.map do |value|
+        "  #{identifier(value.name)} '#{escape_string(value.caption)}'"
+      end
+      folder = if enumeration.folder
+        " FOLDER '#{escape_string(enumeration.folder)}'"
+      else
+        ""
+      end
+
+      "CREATE OR MODIFY ENUMERATION #{qualified(app_module.name, enumeration.name)} (\n" \
+        "#{values.join(",\n")}\n" \
+        ")#{folder};"
+    end
 
     def entity_statement(app_module, entity)
       persistence = entity.persistable ? "PERSISTENT" : "NON-PERSISTENT"
@@ -103,6 +121,10 @@ module MendixBridge
       else
         raise ValidationError, "unsupported default value: #{value.inspect}"
       end
+    end
+
+    def escape_string(value)
+      value.to_s.gsub("'", "''")
     end
 
     def qualified(module_name, item_name)

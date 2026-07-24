@@ -41,6 +41,19 @@ The target modules must already exist in the Mendix project. An association
 declared inside an entity represents a reference from that entity to its target:
 `:one` generates `Reference`, while `:many` generates `ReferenceSet`.
 
+Define enumerations in the same module:
+
+```ruby
+enumeration "CustomerStatus", folder: "Domain/Enums" do
+  value "Active"
+  value "Waiting", caption: "Waiting for customer"
+end
+```
+
+Enumeration creation and safe modifications participate in `plan` and `apply`.
+Removing an existing value remains blocked until explicit migration support is
+available.
+
 ## Git-controlled Mendix branches
 
 Keep Studio Pro closed during branch transitions and use Git as the source of

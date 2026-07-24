@@ -124,6 +124,49 @@ class DSLTest < Minitest::Test
     assert_includes mdl, "Status: Enumeration(CRM.CustomerStatus) DEFAULT 'Active'"
   end
 
+  def test_builds_and_generates_enumerations
+    model = MendixBridge.app("Example") do
+      modulo "CRM" do
+        enumeration "CustomerStatus", folder: "Domain/Enums" do
+          value "Active"
+          value "Waiting", caption: "Waiting for customer's response"
+        end
+      end
+    end
+
+    assert_equal "CustomerStatus", model.to_h.dig(:modules, 0, :enumerations, 0, :name)
+    assert_equal "Active", model.to_h.dig(
+      :modules, 0, :enumerations, 0, :values, 0, :caption
+    )
+
+    mdl = MendixBridge.compile(model, format: :mdl)
+    assert_includes mdl, "CREATE OR MODIFY ENUMERATION CRM.CustomerStatus"
+    assert_includes mdl, "Active 'Active'"
+    assert_includes mdl, "Waiting 'Waiting for customer''s response'"
+    assert_includes mdl, ") FOLDER 'Domain/Enums';"
+  end
+
+  def test_rejects_empty_or_duplicate_enumeration_values
+    assert_raises(ArgumentError) do
+      MendixBridge.app("Example") do
+        modulo "CRM" do
+          enumeration "Empty"
+        end
+      end
+    end
+
+    assert_raises(ArgumentError) do
+      MendixBridge.app("Example") do
+        modulo "CRM" do
+          enumeration "Status" do
+            value "Active"
+            value "Active"
+          end
+        end
+      end
+    end
+  end
+
   def test_can_skip_an_existing_association
     model = MendixBridge.app("Example") do
       modulo "CRM" do
@@ -585,5 +628,50 @@ class DSLTest < Minitest::Test
     assert_equal "modify", operations.fetch("CRM.Order").action
     assert_equal "create", operations.fetch("CRM.Invoice").action
     assert_equal true, plan.blocked?
+  end
+
+  def test_plans_enumeration_creation_changes_and_removals
+    inventory = MendixBridge::Inventory.new(
+      [
+        {
+          "label" => "CRM",
+          "type" => "module",
+          "qualifiedName" => "CRM",
+          "children" => [
+            {
+              "label" => "Status",
+              "type" => "enumeration",
+              "qualifiedName" => "CRM.Status"
+            }
+          ]
+        }
+      ],
+      details: {
+        "CRM.Status" => {
+          "parse_status" => "parsed",
+          "values" => [
+            { "name" => "Active", "caption" => "Active" },
+            { "name" => "Legacy", "caption" => "Legacy" }
+          ]
+        }
+      }
+    )
+    model = MendixBridge.app("Example") do
+      modulo "CRM" do
+        enumeration "Status" do
+          value "Active", caption: "Currently active"
+        end
+        enumeration "Priority" do
+          value "High"
+        end
+      end
+    end
+
+    operations = MendixBridge::ChangePlanner.plan(model, inventory)
+      .operations.to_h { |operation| [operation.name, operation] }
+
+    assert_equal "blocked", operations.fetch("CRM.Status").action
+    assert_equal ["Legacy"], operations.fetch("CRM.Status").changes["removed_values"]
+    assert_equal "create", operations.fetch("CRM.Priority").action
   end
 end

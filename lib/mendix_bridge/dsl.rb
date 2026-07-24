@@ -69,6 +69,7 @@ module MendixBridge
       def initialize(name)
         @name = name.to_s
         @entities = []
+        @enumerations = []
       end
 
       def entity(name, persistable: true, &block)
@@ -79,8 +80,51 @@ module MendixBridge
         @entities << EntityBuilder.build(name, persistable:, &block)
       end
 
+      def enumeration(name, folder: nil, &block)
+        if @enumerations.any? { |enumeration| enumeration.name == name.to_s }
+          raise ArgumentError, "duplicate enumeration: #{name}"
+        end
+
+        @enumerations << EnumerationBuilder.build(name, folder:, &block)
+      end
+
       def result
-        Model::AppModule.new(name: @name, entities: @entities)
+        Model::AppModule.new(
+          name: @name,
+          entities: @entities,
+          enumerations: @enumerations
+        )
+      end
+    end
+
+    class EnumerationBuilder
+      def self.build(name, folder: nil, &block)
+        builder = new(name, folder)
+        builder.instance_eval(&block) if block
+        builder.result
+      end
+
+      def initialize(name, folder)
+        @name = name.to_s
+        @folder = folder&.to_s
+        @values = []
+      end
+
+      def value(name, caption: nil)
+        if @values.any? { |value| value.name == name.to_s }
+          raise ArgumentError, "duplicate enumeration value: #{name}"
+        end
+
+        @values << Model::EnumerationValue.new(
+          name: name.to_s,
+          caption: (caption || name).to_s
+        )
+      end
+
+      def result
+        raise ArgumentError, "enumeration #{@name} requires at least one value" if @values.empty?
+
+        Model::Enumeration.new(name: @name, folder: @folder, values: @values)
       end
     end
 
