@@ -77,6 +77,7 @@ module MendixBridge
 
       statements.concat(user_role_statements)
       statements.concat(project_security_statements)
+      statements.concat(navigation_statements)
       statements.join("\n\n") << "\n"
     end
 
@@ -167,6 +168,50 @@ module MendixBridge
         "ALTER PROJECT SECURITY LEVEL #{security.level.upcase};",
         "ALTER PROJECT SECURITY DEMO USERS #{security.demo_users ? 'ON' : 'OFF'};"
       ]
+    end
+
+    def navigation_statements
+      @model.navigation_profiles.map do |profile|
+        lines = [
+          "CREATE OR REPLACE NAVIGATION #{identifier(profile.name)}",
+          "  HOME PAGE #{qualified_reference(profile.home_page)}"
+        ]
+        profile.role_home_pages.each do |entry|
+          lines << "  HOME PAGE #{qualified_reference(entry.page)} " \
+            "FOR #{qualified_reference(entry.role)}"
+        end
+        if profile.login_page
+          lines << "  LOGIN PAGE #{qualified_reference(profile.login_page)}"
+        end
+        if profile.not_found_page
+          lines << "  NOT FOUND PAGE #{qualified_reference(profile.not_found_page)}"
+        end
+        unless profile.items.empty?
+          lines << "  MENU ("
+          profile.items.each do |item|
+            lines.concat(navigation_item_lines(item, 4))
+          end
+          lines << "  )"
+        end
+        "#{lines.join("\n")};"
+      end
+    end
+
+    def navigation_item_lines(item, indentation)
+      prefix = " " * indentation
+      if item.is_a?(Model::NavigationMenu)
+        lines = ["#{prefix}MENU '#{escape_string(item.caption)}' ("]
+        item.items.each do |child|
+          lines.concat(navigation_item_lines(child, indentation + 2))
+        end
+        lines << "#{prefix});"
+        lines
+      else
+        [
+          "#{prefix}MENU ITEM '#{escape_string(item.caption)}' " \
+          "#{item.action.upcase} #{qualified_reference(item.target)};"
+        ]
+      end
     end
 
     def entity_statement(app_module, entity)
