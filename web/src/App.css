@@ -11,7 +11,9 @@ header {
   display: flex; align-items: center; gap: 14px; padding: 8px 14px;
   background: var(--panel); border-bottom: 1px solid var(--line);
 }
-header .app-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+header .app-name { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  font-weight: 600; color: var(--fg); }
+header .app-name img { width: 30px; height: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 header .spacer { flex: 1; }
 .theme-pick { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .theme-pick select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
@@ -54,6 +56,11 @@ code { background: var(--code); padding: 1px 5px; border-radius: 4px; font: 12px
 a.ref { color: var(--accent); cursor: pointer; }
 a.ref:hover { text-decoration: underline; }
 .empty { color: var(--muted); font-style: italic; }
+.startup-state { height: 100%; display: grid; place-content: center; justify-items: center;
+  background: var(--bg); }
+.startup-state > img { width: 96px; height: 96px; border-radius: 22px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.35); }
+.startup-state .loading, .startup-state .fatal { padding: 16px 24px; }
 
 /* ---- visual entity editor ---- */
 .editor-open { margin: -6px 0 16px; background: var(--accent); color: #fff; border: 0;
@@ -179,6 +186,7 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
   background: var(--accent); color: #fff; }
 .statusbar .spacer { flex: 1; }
 .statusbar .sb-meta { opacity: .85; }
+.statusbar .status-logo { width: 16px; height: 16px; border-radius: 4px; }
 
 /* ---- responsiveness ---- */
 @media (max-width: 1200px) {
@@ -191,7 +199,7 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 }
 @media (max-width: 640px) {
   aside { width: 180px; }
-  header .app-name { display: none; }
+  header .app-name span { display: none; }
 }
 
 /* drag-to-add affordance */

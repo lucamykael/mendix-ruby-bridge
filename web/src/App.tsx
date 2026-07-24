@@ -62,8 +62,18 @@ export default function App() {
     setSel(found ?? { qn, type: inv.details[qn]?.kind ?? "element", label: qn.split(".").pop() ?? qn });
   };
 
-  if (error) return <div className="fatal">Failed to load inventory: {error}</div>;
-  if (!inv) return <div className="loading">Loading inventory…</div>;
+  if (error) return (
+    <div className="startup-state">
+      <img src="/brand/mendix-ruby-bridge.png" alt="" />
+      <div className="fatal">Failed to load inventory: {error}</div>
+    </div>
+  );
+  if (!inv) return (
+    <div className="startup-state">
+      <img src="/brand/mendix-ruby-bridge.png" alt="" />
+      <div className="loading">Loading inventory…</div>
+    </div>
+  );
 
   const meta = inv.meta;
   const detail = sel ? inv.details[sel.qn] : undefined;
@@ -74,7 +84,10 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <span className="app-name">◆ {meta.source_project?.split("/").pop()?.replace(/\.mpr$/, "") ?? "Mendix Bridge"}</span>
+        <span className="app-name">
+          <img src="/brand/mendix-ruby-bridge.png" alt="Mendix Ruby Bridge" />
+          <span>{meta.source_project?.split("/").pop()?.replace(/\.mpr$/, "") ?? "Mendix Bridge"}</span>
+        </span>
         <nav className="tabs">
           <button className={view === "explorer" ? "on" : ""} onClick={() => setView("explorer")}>App Explorer</button>
           <button className={view === "marketplace" ? "on" : ""} onClick={() => setView("marketplace")}>Marketplace</button>
@@ -111,6 +124,7 @@ export default function App() {
       )}
 
       <footer className="statusbar">
+        <img className="status-logo" src="/favicon.png" alt="" />
         <span>{health ? `Backend v${health.version}` : "Backend unavailable"}</span>
         <span className="spacer" />
         {sel && <span>{sel.type} · {sel.qn}</span>}
