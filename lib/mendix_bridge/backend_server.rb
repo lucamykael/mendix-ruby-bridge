@@ -642,12 +642,38 @@ module MendixBridge
     end
 
     def resolve_run_cmd(project)
-      raw = @run_cmd_override || ENV["MRB_RUN_CMD"]
-      return nil unless raw && !raw.strip.empty?
+      # 1. Explicit override (init param or env var)
+      if (raw = @run_cmd_override || ENV["MRB_RUN_CMD"]) && !raw.strip.empty?
+        require "shellwords"
+        return Shellwords.split(raw) + [project]
+      end
 
-      require "shellwords"
-      Shellwords.split(raw) + [project]
+      # 2. .mendix-run-cmd file in project directory (one-liner, comments with # ignored)
+      project_dir = File.dirname(File.expand_path(project))
+      run_file = File.join(project_dir, ".mendix-run-cmd")
+      if File.file?(run_file)
+        raw = File.read(run_file).lines
+          .reject { |l| l.strip.start_with?("#") || l.strip.empty? }.first&.strip
+        if raw
+          require "shellwords"
+          return Shellwords.split(raw) + [project]
+        end
+      end
+
+      # 3. Find 'mx' in PATH
+      mx = which_binary("mx")
+      return [mx, "run", project] if mx
+
+      nil
     rescue ArgumentError
+      nil
+    end
+
+    def which_binary(name)
+      (ENV["PATH"] || "").split(File::PATH_SEPARATOR).each do |dir|
+        candidate = File.join(dir, name)
+        return candidate if File.executable?(candidate) && !File.directory?(candidate)
+      end
       nil
     end
 
@@ -664,40 +690,53 @@ module MendixBridge
     end
 
     def auth_status(response)
-      json(response, { logged_in: !@auth_user.nil?, username: @auth_user })
+      # Always ask mxcli for the live credential status
+      _, _, st = Open3.capture3(@mxcli, "auth", "status", "--offline")
+      live = st.success?
+      @auth_user = nil unless live
+      json(response, { logged_in: live, username: @auth_user })
+    rescue StandardError
+      json(response, { logged_in: false, username: nil })
     end
 
     def auth_login(request, response)
       payload = JSON.parse(request.body.to_s)
-      username = payload.fetch("username").to_s.strip
-      password = payload.fetch("password").to_s
-      return json(response, { ok: false, message: "Username is required." }, status: 400) if username.empty?
-      return json(response, { ok: false, message: "Password is required." }, status: 400) if password.empty?
+      pat = payload.fetch("pat").to_s.strip
+      return json(response, { ok: false, message: "Personal Access Token is required." }, status: 400) if pat.empty?
 
-      stdout, stderr, status = Open3.capture3(@mxcli, "login", username, password)
+      stdout, stderr, status = Open3.capture3(@mxcli, "auth", "login", "--token", pat)
       if status.success?
-        @auth_user = username
-        json(response, { ok: true, message: "Logged in as #{username}.", username: username })
+        # Try to read username from status after login
+        out2, _, _ = Open3.capture3(@mxcli, "auth", "status", "--json", "--offline")
+        begin
+          data = JSON.parse(out2)
+          @auth_user = data["username"] || data["user"] || data["email"] || "authenticated"
+        rescue JSON::ParserError
+          @auth_user = "authenticated"
+        end
+        json(response, { ok: true, message: "PAT stored. Marketplace access enabled.", username: @auth_user })
       else
-        msg = (stderr.empty? ? stdout : stderr).strip
-        json(response, { ok: false, message: msg.empty? ? "Login failed." : msg }, status: 401)
+        msg = (stderr.empty? ? stdout : stderr).lines
+          .reject { |l| l.strip.start_with?("WARNING:") }.join.strip
+        json(response, { ok: false, message: msg.empty? ? "Login failed. Check your PAT." : msg }, status: 401)
       end
     rescue KeyError => error
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
     rescue JSON::ParserError
       json(response, { error: "invalid JSON payload" }, status: 400)
-    rescue BackendServerError => error
-      json(response, { ok: false, message: error.message }, status: 502)
     end
 
     def auth_logout(response)
-      if @auth_user
-        run_mxcli("logout") rescue nil
-        @auth_user = nil
-        json(response, { ok: true, message: "Logged out." })
+      _, _, st = Open3.capture3(@mxcli, "auth", "logout")
+      @auth_user = nil
+      if st.success?
+        json(response, { ok: true, message: "PAT removed." })
       else
-        json(response, { ok: false, message: "Not logged in." })
+        json(response, { ok: true, message: "Logged out (no stored PAT)." })
       end
+    rescue StandardError => error
+      @auth_user = nil
+      json(response, { ok: false, message: error.message })
     end
 
     def source_project

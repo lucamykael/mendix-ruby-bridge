@@ -401,7 +401,11 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .login-avatar { font-size: 32px; }
 .login-name { font-weight: 600; font-size: 14px; }
 .login-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.login-hint { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.login-hint { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+.login-pat-link { font-size: 12px; color: var(--accent); margin-bottom: 10px; display: block; }
+.login-pat-link:hover { text-decoration: underline; }
+.login-pat-row { display: flex; gap: 4px; }
+.login-pat-row input { flex: 1; min-width: 0; }
 .login-form { display: flex; flex-direction: column; gap: 10px; }
 
 /* ---- status bar ---- */

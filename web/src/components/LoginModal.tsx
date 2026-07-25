@@ -10,14 +10,14 @@ async function getAuthStatus(): Promise<AuthStatus> {
   return r.json() as Promise<AuthStatus>;
 }
 
-async function login(username: string, password: string): Promise<{ ok: boolean; message: string }> {
+async function loginPAT(pat: string): Promise<{ ok: boolean; message: string; username?: string }> {
   const r = await fetch("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ pat }),
   });
-  const body = (await r.json()) as { ok?: boolean; message?: string; error?: string };
-  return { ok: body.ok === true, message: body.message ?? body.error ?? "Unknown error" };
+  const body = (await r.json()) as { ok?: boolean; message?: string; username?: string; error?: string };
+  return { ok: body.ok === true, message: body.message ?? body.error ?? "Unknown error", username: body.username };
 }
 
 async function logout(): Promise<void> {
@@ -31,31 +31,30 @@ interface Props {
 
 export default function LoginModal({ onClose, onAuthChange }: Props) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [pat, setPat] = useState("");
+  const [showPat, setShowPat] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean }>();
 
   useEffect(() => {
-    getAuthStatus().then((s) => {
-      setStatus(s);
-      if (s.username) setUsername(s.username);
-    }).catch(() => setStatus({ logged_in: false, username: null }));
+    getAuthStatus()
+      .then(setStatus)
+      .catch(() => setStatus({ logged_in: false, username: null }));
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) return;
+    if (!pat.trim()) return;
     setLoading(true);
     setMessage(undefined);
-    const result = await login(username.trim(), password);
+    const result = await loginPAT(pat.trim());
     setLoading(false);
     if (result.ok) {
-      const next = { logged_in: true, username: username.trim() };
+      const next: AuthStatus = { logged_in: true, username: result.username ?? null };
       setStatus(next);
       onAuthChange(next);
       setMessage({ text: result.message, ok: true });
-      setPassword("");
+      setPat("");
     } else {
       setMessage({ text: result.message, ok: false });
     }
@@ -64,12 +63,10 @@ export default function LoginModal({ onClose, onAuthChange }: Props) {
   const handleLogout = async () => {
     setLoading(true);
     await logout();
-    const next = { logged_in: false, username: null };
+    const next: AuthStatus = { logged_in: false, username: null };
     setStatus(next);
     onAuthChange(next);
-    setUsername("");
-    setPassword("");
-    setMessage({ text: "Logged out.", ok: true });
+    setMessage({ text: "PAT removed.", ok: true });
     setLoading(false);
   };
 
@@ -77,18 +74,18 @@ export default function LoginModal({ onClose, onAuthChange }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal login-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">
-          {status?.logged_in ? "Mendix Account" : "Log in to Mendix"}
+          {status?.logged_in ? "Mendix Account" : "Connect Mendix Account"}
         </div>
 
-        {status === null && <p className="muted">Loading…</p>}
+        {status === null && <p className="muted">Checking credentials…</p>}
 
         {status?.logged_in ? (
           <>
             <div className="login-info">
               <span className="login-avatar">👤</span>
               <div>
-                <div className="login-name">{status.username}</div>
-                <div className="login-sub">Logged in — marketplace access enabled</div>
+                <div className="login-name">{status.username ?? "Authenticated"}</div>
+                <div className="login-sub">PAT active — marketplace access enabled</div>
               </div>
             </div>
             {message && (
@@ -97,45 +94,52 @@ export default function LoginModal({ onClose, onAuthChange }: Props) {
             <div className="modal-actions">
               <button className="editor-secondary" onClick={onClose}>Close</button>
               <button className="w-btn danger" disabled={loading} onClick={() => void handleLogout()}>
-                {loading ? "Logging out…" : "Log out"}
+                {loading ? "Removing…" : "Remove PAT"}
               </button>
             </div>
           </>
         ) : status !== null ? (
           <>
             <p className="login-hint">
-              Log in with your Mendix account to access marketplace widgets that require authentication.
+              A <strong>Personal Access Token (PAT)</strong> gives mxcli access to the Mendix Marketplace for installing authenticated widgets.
             </p>
+            <a
+              className="login-pat-link"
+              href="https://user-settings.mendix.com/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Create a PAT at user-settings.mendix.com →
+            </a>
             <form onSubmit={(e) => void handleLogin(e)} className="login-form">
               <div className="modal-field">
-                <label>Email</label>
-                <input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoComplete="username"
-                  required
-                />
-              </div>
-              <div className="modal-field">
-                <label>Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
+                <label>Personal Access Token</label>
+                <div className="login-pat-row">
+                  <input
+                    type={showPat ? "text" : "password"}
+                    placeholder="Paste your PAT here…"
+                    value={pat}
+                    onChange={(e) => setPat(e.target.value)}
+                    autoComplete="off"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="ai-key-toggle"
+                    onClick={() => setShowPat((v) => !v)}
+                    title={showPat ? "Hide" : "Show"}
+                  >
+                    {showPat ? "◎" : "●"}
+                  </button>
+                </div>
               </div>
               {message && (
                 <div className={message.ok ? "git-notice" : "git-error"}>{message.text}</div>
               )}
               <div className="modal-actions">
                 <button type="button" className="editor-secondary" onClick={onClose}>Cancel</button>
-                <button type="submit" className="w-btn" disabled={loading || !username.trim() || !password.trim()}>
-                  {loading ? "Logging in…" : "Log in"}
+                <button type="submit" className="w-btn" disabled={loading || !pat.trim()}>
+                  {loading ? "Validating…" : "Save PAT"}
                 </button>
               </div>
             </form>
