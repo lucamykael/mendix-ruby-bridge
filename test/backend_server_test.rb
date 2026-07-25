@@ -47,6 +47,13 @@ class BackendServerTest < Minitest::Test
         "layout" => "Atlas_Core.Default",
         "parameters" => [],
         "mdl" => "create or modify page Module.Home (Title: 'Home') {}"
+      },
+      "Module.ACT_Save" => {
+        "parse_status" => "parsed",
+        "parameters" => [{ "name" => "Customer", "type" => "Module.Customer" }],
+        "return_type" => "Boolean",
+        "folder" => "Actions",
+        "mdl" => "create or modify microflow Module.ACT_Save ($Customer: Module.Customer) returns Boolean begin return true; end;"
       }
     )
     write_json("inventory/dependencies.json", "schema_version" => 1, "nodes" => 1, "edges" => [])
@@ -166,6 +173,28 @@ class BackendServerTest < Minitest::Test
     drafts = get_json("/api/drafts")
     assert drafts.key?("entities")
     assert_includes drafts["pages"].keys, "Module.Home"
+  end
+
+  def test_saves_a_rebuilt_flow_draft
+    response = post_json(
+      "/api/flow",
+      qn: "Module.ACT_Save",
+      body: "  @position(10, 20)\n  return true;"
+    )
+
+    assert_equal "200", response.code
+    body = JSON.parse(response.body)
+    assert body["ok"]
+    assert_includes body["mdl"], "CREATE OR MODIFY MICROFLOW Module.ACT_Save ($Customer: Module.Customer)"
+    assert_includes body["mdl"], "RETURNS Boolean"
+    assert_includes body["mdl"], "FOLDER 'Actions'"
+    assert_includes body["mdl"], "return true;"
+
+    drafts = get_json("/api/drafts")
+    assert_equal true, drafts.dig("flows", "Module.ACT_Save", "valid")
+
+    unknown = post_json("/api/flow", qn: "Module.Missing", body: "")
+    assert_equal "404", unknown.code
   end
 
   def test_health_reports_page_drafts_capability

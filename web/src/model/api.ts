@@ -176,6 +176,22 @@ export async function savePage(qn: string, content: string): Promise<SavePageRes
   }
 }
 
+/** Validate + persist a rebuilt flow body as a draft (same contract as savePage). */
+export async function saveFlow(qn: string, body: string): Promise<SavePageResult> {
+  try {
+    const r = await fetch(`${BASE}/flow`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ qn, body }),
+    });
+    const parsed = (await r.json().catch(() => ({}))) as Partial<SavePageResult> & { error?: string };
+    if (!r.ok && parsed.ok === undefined) throw new Error(parsed.error ?? `Save failed (${r.status}).`);
+    return parsed as SavePageResult;
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e) };
+  }
+}
+
 // ---- guarded Git workflow --------------------------------------------------
 // Mutations require confirming Studio Pro is closed (it locks the .mpr). Unlike
 // the marketplace/layout helpers these never fake success: a failed guard or a
