@@ -422,7 +422,9 @@ module MendixBridge
         stdout, stderr, status = Open3.capture3(@mxcli, "check", file.path)
         return [true, nil] if status.success?
 
-        [false, (stderr.empty? ? stdout : stderr).strip]
+        output = (stderr.empty? ? stdout : stderr).lines
+          .reject { |line| line.start_with?("WARNING:") }.join.strip
+        [false, output]
       end
     end
 
