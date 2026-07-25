@@ -122,16 +122,20 @@ export function flowBodyMdl(nodes: Node[], edges: Edge[]): string {
   });
 
   const start = nodes.find((node) => node.type === "start");
-  walk(start?.id, undefined, ctx, "  ");
 
-  // Blocks not connected to the main path yet still serialize, so nothing the
-  // user added silently disappears from the draft.
+  // Disconnected activity blocks come first so they precede the terminal
+  // return. Decision and terminal nodes are skipped — they cannot appear
+  // as standalone statements in MDL and are meaningless without wiring.
   nodes.forEach((node) => {
-    if (ctx.visited.has(node.id) || node.type === "start") return;
+    if (node.type === "start" || node.type === "end" || node.type === "decision") return;
+    const ins = edges.some((e) => e.target === node.id);
+    if (ins) return; // reachable from something — walk() will handle it
     annotations(node, ctx, "  ");
     ctx.lines.push(`  ${statement(node, ctx)}`);
     ctx.visited.add(node.id);
   });
+
+  walk(start?.id, undefined, ctx, "  ");
 
   return ctx.lines.join("\n");
 }
