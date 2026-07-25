@@ -400,6 +400,7 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .draft-head { display: flex; align-items: center; gap: 10px; }
 .draft-when { color: var(--muted); font-size: 11px; margin-left: auto; }
 .draft-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.draft-note-error { color: var(--danger, #e05050); }
 .draft-card pre { margin-top: 8px; max-height: 240px; }
 .draft-card summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
 

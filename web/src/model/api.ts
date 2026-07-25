@@ -192,6 +192,26 @@ export async function saveFlow(qn: string, body: string): Promise<SavePageResult
   }
 }
 
+/** Apply a validated draft to the source .mpr via the guarded workflow. */
+export async function applyDraft(
+  qn: string,
+  type: "page" | "flow",
+  studioClosed: boolean,
+): Promise<SavePageResult> {
+  try {
+    const r = await fetch(`${BASE}/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ qn, type, studio_closed: studioClosed }),
+    });
+    const parsed = (await r.json().catch(() => ({}))) as Partial<SavePageResult> & { error?: string };
+    if (!r.ok && parsed.ok === undefined) throw new Error(parsed.error ?? `Apply failed (${r.status}).`);
+    return parsed as SavePageResult;
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e) };
+  }
+}
+
 // ---- guarded Git workflow --------------------------------------------------
 // Mutations require confirming Studio Pro is closed (it locks the .mpr). Unlike
 // the marketplace/layout helpers these never fake success: a failed guard or a
