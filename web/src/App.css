@@ -289,6 +289,36 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .w-drop-empty { border: 1px dashed var(--line); border-radius: 6px; padding: 14px; text-align: center;
   color: var(--muted); font-size: 12px; }
 .w-drop-empty.large { flex: 1; display: grid; place-items: center; }
+/* Structure/Design mode toggle */
+.pb-modes { display: inline-flex; margin-left: 12px; background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px; gap: 2px; }
+.pb-modes button { background: transparent; border: 0; color: var(--muted); font-size: 11px;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer; }
+.pb-modes button.on { background: var(--accent); color: #fff; }
+
+/* Design mode: render the page like the real thing — hide builder chrome */
+.pb-design { background: #f4f5f7; color: #24292f; }
+.pb-design .w-gap { display: none; }
+.pb-design .w-drop-empty { display: none; }
+.pb-design .w-box-head { display: none; }
+.pb-design .w-box { border: none; padding: 0; background: transparent; }
+.pb-design .w-leaf { background: transparent; }
+.pb-design .w-text { color: #24292f; font-size: 14px; }
+.pb-design .w-text.rm-h1 { font-size: 28px; font-weight: 700; margin: 6px 0; }
+.pb-design .w-text.rm-h2 { font-size: 21px; font-weight: 700; margin: 5px 0; }
+.pb-design .w-text.rm-h3 { font-size: 17px; font-weight: 600; margin: 4px 0; }
+.pb-design .w-text.rm-h4 { font-size: 15px; font-weight: 600; margin: 3px 0; }
+.pb-design .w-text.rm-paragraph { color: #57606a; }
+.pb-design .w-field > span:first-child { color: #57606a; }
+.pb-design .w-input { background: #fff; border-color: #d0d7de; color: #24292f; }
+.pb-design .w-btn { border-radius: 4px; }
+.pb-design .w-grid, .pb-design .w-img { border-color: #d0d7de; color: #57606a; background: #fff; }
+.pb-design .w-generic { background: #eaeef2; color: #57606a; }
+.pb-design .w-check { color: #24292f; }
+.pb-design .w-row, .pb-design .w-column { border: none; }
+.pb-design .w-del { display: none; }
+.pb-design .w-box.selected, .pb-design .w-leaf.selected { outline-color: #316dca; }
+
 .pb-ok { color: var(--node-start); font-size: 11px; }
 .pb-err { color: var(--node-merge); font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
