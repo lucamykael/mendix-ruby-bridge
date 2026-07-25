@@ -54,11 +54,15 @@ interface Props {
   details: Record<string, ElementDetail>;
   assocs: Assoc[];
   onOpenEntity: (qn: string) => void;
+  initialModule?: string;
 }
 
-export default function ERDiagram({ tree, details, assocs, onOpenEntity }: Props) {
+export default function ERDiagram({ tree, details, assocs, onOpenEntity, initialModule }: Props) {
   const allModules = useMemo(() => listErModules(tree), [tree]);
-  const [selected, setSelected] = useState<Set<string>>(() => loadSelection(allModules));
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    if (initialModule) return new Set([initialModule]);
+    return loadSelection(allModules);
+  });
 
   const base = useMemo(
     () => buildErDiagram(tree, details, assocs, selected),

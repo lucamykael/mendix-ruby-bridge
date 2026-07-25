@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, Controls,
   useNodesState, useEdgesState, useReactFlow, addEdge, reconnectEdge,
   type Connection, type Edge, type Node, type NodeChange,
 } from "@xyflow/react";
@@ -43,16 +43,20 @@ const SHORTCUTS = [
 // Studio Pro-style edit dialog for a flow block: caption + activity kind, with
 // the flow's parameters listed for reference. Edits are canvas drafts.
 function NodeEditModal({
-  node, parameters, onSave, onClose,
+  node, parameters, onSave, onClose, onDisconnect,
 }: {
   node: Node;
   parameters: Array<{ name?: string; type?: string }>;
-  onSave: (label: string, kind: string) => void;
+  onSave: (label: string, kind: string, stmt: string) => void;
   onClose: () => void;
+  onDisconnect?: () => void;
 }) {
-  const data = node.data as { label?: string; kind?: string };
+  const data = node.data as { label?: string; kind?: string; stmt?: string };
   const [label, setLabel] = useState(String(data.label ?? ""));
   const [kind, setKind] = useState(String(data.kind ?? "action"));
+  const [stmt, setStmt] = useState(String(data.stmt ?? ""));
+
+  const editableStmt = node.type === "activity" || node.type === "decision";
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -72,6 +76,20 @@ function NodeEditModal({
             </select>
           </label>
         )}
+        {editableStmt && (
+          <label className="modal-field">
+            <span>MDL statement {node.type === "decision" ? "(if expression)" : ""}</span>
+            <textarea
+              className="modal-stmt"
+              value={stmt}
+              spellCheck={false}
+              rows={3}
+              placeholder={node.type === "decision" ? "$Object/Attribute = true" : "CALL JAVA ACTION Module.Action ()"}
+              onChange={(e) => setStmt(e.target.value)}
+            />
+            <span className="modal-hint">Raw MDL — validated by `mxcli check` on Save flow.</span>
+          </label>
+        )}
         {parameters.length > 0 && (
           <div className="modal-field">
             <span>Flow parameters</span>
@@ -85,8 +103,18 @@ function NodeEditModal({
           </div>
         )}
         <div className="modal-actions">
+          {onDisconnect && (
+            <button
+              className="editor-secondary"
+              title="Remove this block's arrows and heal the flow line; the block stays on the canvas"
+              onClick={onDisconnect}
+            >
+              ⛓ Disconnect
+            </button>
+          )}
+          <span className="spacer" />
           <button className="editor-secondary" onClick={onClose}>Cancel</button>
-          <button className="w-btn" onClick={() => onSave(label, kind)}>OK</button>
+          <button className="w-btn" onClick={() => onSave(label, kind, stmt)}>OK</button>
         </div>
       </div>
     </div>
@@ -105,7 +133,9 @@ function PersistedFlowInner({ qn, mdl, savedPositions, parameters = [] }: Props)
   const [status, setStatus] = useState<string>();
   const [added, setAdded] = useState(0);
   const [editing, setEditing] = useState<Node>();
-  const { zoomIn, zoomOut, zoomTo, fitView } = useReactFlow();
+  const { zoomIn, zoomOut, zoomTo, fitView, screenToFlowPosition } = useReactFlow();
+  const reactFlowRef = useRef<HTMLDivElement>(null);
+  const detachedDragRef = useRef<string | null>(null);
 
   useEffect(() => {
     setNodes(initial);
@@ -136,22 +166,223 @@ function PersistedFlowInner({ qn, mdl, savedPositions, parameters = [] }: Props)
     [setEdges],
   );
 
-  const addBlock = (shortcut: (typeof SHORTCUTS)[number]) => {
-    const rightmost = nodes.reduce((max, node) => Math.max(max, node.position.x), 0);
-    const id = `new${added}`;
-    setAdded((n) => n + 1);
-    setNodes((current) => [
-      ...current,
-      {
-        id,
-        type: shortcut.type,
-        position: { x: rightmost + 230, y: 40 },
-        data: { label: shortcut.label, kind: shortcut.kind },
-      },
-    ]);
-    setDirty(true);
-    setStatus(`${shortcut.label} added (canvas draft).`);
+  // Approximate node center (positions are top-left corners).
+  const nodeCenter = (n: Node) => ({
+    x: n.position.x + (n.type === "start" || n.type === "end" ? 18 : 70),
+    y: n.position.y + (n.type === "start" || n.type === "end" ? 18 : 28),
+  });
+
+  // Distance from point p to the segment a–b.
+  const segmentDistance = (
+    p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number },
+  ) => {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
   };
+
+  // Edge whose line passes close to the point, if any.
+  const edgeNear = useCallback(
+    (p: { x: number; y: number }, threshold = 60): Edge | undefined => {
+      const byId = new Map(nodes.map((n) => [n.id, n]));
+      let best: Edge | undefined;
+      let bestDistance = threshold;
+      for (const e of edges) {
+        const a = byId.get(e.source);
+        const b = byId.get(e.target);
+        if (!a || !b) continue;
+        const d = segmentDistance(p, nodeCenter(a), nodeCenter(b));
+        if (d < bestDistance) { bestDistance = d; best = e; }
+      }
+      return best;
+    },
+    [nodes, edges],
+  );
+
+  // Insert a new node. When `intoEdge` is given, splice it into that arrow
+  // (source→new→target). With no edge, the node lands free-floating — connect
+  // it by drawing arrows, or drop it onto the flow line to integrate.
+  const insertNode = useCallback(
+    (type: string, kind: string, label: string, position?: { x: number; y: number }, intoEdge?: Edge | null, stmt?: string) => {
+      const id = `new${added}`;
+      setAdded((n) => n + 1);
+
+      let pos = position;
+      if (!pos) {
+        // Place after the rightmost non-end node
+        const rightmost = nodes.reduce(
+          (max, n) => (n.type !== "end" ? Math.max(max, n.position.x) : max),
+          0,
+        );
+        const endNode = nodes.find((n) => n.type === "end");
+        pos = { x: rightmost + 220, y: endNode?.position.y ?? 40 };
+      }
+
+      // Default (toolbar button): splice before the end event.
+      let target = intoEdge;
+      if (target === undefined) {
+        const endNode = nodes.find((n) => n.type === "end");
+        target = endNode ? edges.find((e) => e.target === endNode.id) ?? null : null;
+      }
+
+      const newNode: Node = { id, type, position: pos, data: { label, kind, stmt } };
+      setNodes((cur) => [...cur, newNode]);
+      if (target) {
+        const spliced = target;
+        setEdges((cur) => {
+          const without = cur.filter((e) => e.id !== spliced.id);
+          return [
+            ...without,
+            { id: `e-${spliced.source}-${id}`, source: spliced.source, target: id, style: { stroke: "var(--edge)" } },
+            { id: `e-${id}-${spliced.target}`, source: id, target: spliced.target, style: { stroke: "var(--edge)" } },
+          ];
+        });
+        setStatus(`${label} inserted into the flow (canvas draft).`);
+      } else {
+        setStatus(`${label} added — drop it on the flow line or draw arrows to connect (canvas draft).`);
+      }
+      setDirty(true);
+    },
+    [added, nodes, edges, setNodes, setEdges],
+  );
+
+  const addBlock = (shortcut: (typeof SHORTCUTS)[number]) =>
+    insertNode(shortcut.type, shortcut.kind, shortcut.label);
+
+  // Detach a node from the flow line, healing predecessor→successor so the
+  // flow stays connected; the node itself becomes free-floating.
+  const disconnectNode = useCallback(
+    (id: string) => {
+      const incoming = edges.filter((e) => e.target === id);
+      const outgoing = edges.filter((e) => e.source === id);
+      setEdges((cur) => {
+        let next = cur.filter((e) => e.source !== id && e.target !== id);
+        if (incoming.length === 1 && outgoing.length === 1) {
+          next = [...next, {
+            id: `e-${incoming[0].source}-${outgoing[0].target}`,
+            source: incoming[0].source,
+            target: outgoing[0].target,
+            style: { stroke: "var(--edge)" },
+          }];
+        }
+        return next;
+      });
+      setDirty(true);
+      setStatus("Block disconnected — drag it anywhere, reconnect by drawing arrows (canvas draft).");
+    },
+    [edges, setEdges],
+  );
+
+  // Ctrl+drag detaches a connected block from the flow line: its arrows are
+  // removed (predecessor→successor healed) and the block moves freely.
+  const onNodeDragStart = useCallback(
+    (event: MouseEvent | TouchEvent, node: Node) => {
+      if (!("ctrlKey" in event) || !event.ctrlKey) return;
+      if (node.type === "start" || node.type === "end") return;
+      if (!edges.some((e) => e.source === node.id || e.target === node.id)) return;
+      detachedDragRef.current = node.id;
+      disconnectNode(node.id);
+    },
+    [edges, disconnectNode],
+  );
+
+  // Dragging a free-floating block onto the flow line splices it into the
+  // arrow it lands on (connected blocks just move — arrows follow anyway).
+  const onNodeDragStop = useCallback(
+    (_: unknown, node: Node) => {
+      // A Ctrl+drag that just detached this block must not re-link it on drop.
+      if (detachedDragRef.current === node.id) {
+        detachedDragRef.current = null;
+        return;
+      }
+      if (node.type === "start" || node.type === "end") return;
+      const connected = edges.some((e) => e.source === node.id || e.target === node.id);
+      if (connected) return;
+      const hit = edgeNear(nodeCenter(node));
+      if (!hit) return;
+      setEdges((cur) => {
+        const without = cur.filter((e) => e.id !== hit.id);
+        return [
+          ...without,
+          { id: `e-${hit.source}-${node.id}`, source: hit.source, target: node.id, style: { stroke: "var(--edge)" } },
+          { id: `e-${node.id}-${hit.target}`, source: node.id, target: hit.target, style: { stroke: "var(--edge)" } },
+        ];
+      });
+      setDirty(true);
+      setStatus("Block linked into the flow (canvas draft).");
+    },
+    [edges, edgeNear, setEdges],
+  );
+
+  // Keyboard deletion (Delete/Backspace via ReactFlow). Start events are
+  // protected; deleting a mid-line block heals predecessor→successor so the
+  // flow line stays connected. Deleting a selected arrow detaches blocks.
+  const onBeforeDelete = useCallback(
+    async ({ nodes: doomed, edges: doomedEdges }: { nodes: Node[]; edges: Edge[] }) => {
+      const allowed = doomed.filter((n) => n.type !== "start");
+      if (!allowed.length && !doomedEdges.length) return false;
+      return { nodes: allowed, edges: doomedEdges };
+    },
+    [],
+  );
+
+  const onNodesDelete = useCallback(
+    (deleted: Node[]) => {
+      const gone = new Set(deleted.map((n) => n.id));
+      const heals: Edge[] = [];
+      deleted.forEach((n) => {
+        const incoming = edges.filter((e) => e.target === n.id && !gone.has(e.source));
+        const outgoing = edges.filter((e) => e.source === n.id && !gone.has(e.target));
+        if (incoming.length === 1 && outgoing.length === 1) {
+          heals.push({
+            id: `e-${incoming[0].source}-${outgoing[0].target}`,
+            source: incoming[0].source,
+            target: outgoing[0].target,
+            style: { stroke: "var(--edge)" },
+          });
+        }
+      });
+      if (heals.length) {
+        setEdges((cur) => {
+          const ids = new Set(cur.map((e) => e.id));
+          return [...cur, ...heals.filter((h) => !ids.has(h.id))];
+        });
+      }
+      setDirty(true);
+      setStatus(`${deleted.length === 1 ? "Block" : `${deleted.length} blocks`} deleted (canvas draft).`);
+    },
+    [edges, setEdges],
+  );
+
+  const onEdgesDelete = useCallback((deleted: Edge[]) => {
+    if (!deleted.length) return;
+    setDirty(true);
+    setStatus("Arrow removed — block detached from the flow (canvas draft).");
+  }, []);
+
+  // Handle drops from the Toolbox (application/flow-node). Dropping on top of
+  // the flow line splices into that arrow; dropping elsewhere adds a free node.
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const raw = e.dataTransfer.getData("application/flow-node");
+      if (!raw) return;
+      try {
+        const { type, kind, label, stmt } = JSON.parse(raw) as { type: string; kind: string; label: string; stmt?: string };
+        const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        insertNode(type, kind, label, pos, edgeNear(pos) ?? null, stmt);
+      } catch { /* ignore */ }
+    },
+    [screenToFlowPosition, insertNode, edgeNear],
+  );
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes("application/flow-node")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }, []);
 
   const onSave = async () => {
     const positions: NodePosition[] = nodes.map((node) => ({
@@ -201,7 +432,7 @@ function PersistedFlowInner({ qn, mdl, savedPositions, parameters = [] }: Props)
           Save flow
         </button>
       </div>
-      <div className="canvas">
+      <div className="canvas" ref={reactFlowRef}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -211,13 +442,21 @@ function PersistedFlowInner({ qn, mdl, savedPositions, parameters = [] }: Props)
           onReconnect={onReconnect}
           onConnect={onConnect}
           onNodeDoubleClick={(_, node) => setEditing(node)}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDragStop={onNodeDragStop}
+          multiSelectionKeyCode="Shift"
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          deleteKeyCode={["Delete", "Backspace"]}
+          onBeforeDelete={onBeforeDelete}
+          onNodesDelete={onNodesDelete}
+          onEdgesDelete={onEdgesDelete}
           edgesReconnectable
           fitView
           minZoom={0.15}
           proOptions={{ hideAttribution: true }}
         >
           <Background color="var(--grid)" gap={18} />
-          <MiniMap pannable zoomable maskColor="rgba(0,0,0,0.5)" nodeColor="var(--accent)" />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
@@ -225,13 +464,21 @@ function PersistedFlowInner({ qn, mdl, savedPositions, parameters = [] }: Props)
         <NodeEditModal
           node={editing}
           parameters={parameters}
+          onDisconnect={
+            edges.some((e) => e.source === editing.id || e.target === editing.id)
+              ? () => { disconnectNode(editing.id); setEditing(undefined); }
+              : undefined
+          }
           onClose={() => setEditing(undefined)}
-          onSave={(label, kind) => {
+          onSave={(label, kind, stmt) => {
             setNodes((current) =>
               current.map((node) =>
-                node.id === editing.id ? { ...node, data: { ...node.data, label, kind } } : node,
+                node.id === editing.id
+                  ? { ...node, data: { ...node.data, label, kind, stmt: stmt.trim() || undefined } }
+                  : node,
               ),
             );
+            setDirty(true);
             setEditing(undefined);
             setStatus("Block updated (canvas draft).");
           }}

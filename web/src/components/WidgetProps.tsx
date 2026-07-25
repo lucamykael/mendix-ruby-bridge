@@ -46,12 +46,7 @@ interface Props {
 
 export default function WidgetProps({ node, onChange, onEditingChange }: Props) {
   if (!node) {
-    return (
-      <aside className="wprops">
-        <div className="wprops-title">Properties</div>
-        <p className="empty pad">Select a widget to edit its properties.</p>
-      </aside>
-    );
+    return <p className="rp-empty">Select a widget to edit its properties.</p>;
   }
 
   const pairs = parseProps(node.props);
@@ -67,39 +62,41 @@ export default function WidgetProps({ node, onChange, onEditingChange }: Props) 
   };
 
   return (
-    <aside className="wprops">
-      <div className="wprops-title">
-        {node.type}
-        {node.name ? ` · ${node.name}` : ""}
+    <div className="rp-props">
+      <div className="rp-props-head">
+        <span className="rp-props-type">{node.type}</span>
+        <span className="rp-props-label">{node.name ?? ""}</span>
       </div>
 
       {fields.map((field) => {
         const raw = getProp(pairs, field.key);
         const value = field.quoted ? unquote(raw) : raw ?? "";
         return (
-          <label className="wprops-field" key={field.key}>
-            <span>{field.label}</span>
+          <div className="rp-prop-row rp-prop-edit" key={field.key}>
+            <span className="rp-prop-key">{field.label}</span>
             <input
+              className="rp-prop-input"
               value={value}
               placeholder={field.placeholder}
               onFocus={() => onEditingChange(true)}
               onBlur={() => onEditingChange(false)}
               onChange={(e) => setField(field, e.target.value)}
             />
-          </label>
+          </div>
         );
       })}
 
-      <details className="wprops-raw">
-        <summary>Raw MDL props</summary>
+      <details className="rp-prop-raw">
+        <summary className="rp-prop-key">Raw MDL props</summary>
         <textarea
+          className="rp-prop-textarea"
           value={node.props}
-          rows={4}
+          rows={5}
           onFocus={() => onEditingChange(true)}
           onBlur={() => onEditingChange(false)}
           onChange={(e) => onChange(e.target.value)}
         />
       </details>
-    </aside>
+    </div>
   );
 }

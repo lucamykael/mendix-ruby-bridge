@@ -34,7 +34,10 @@ function annotations(node: Node, ctx: Ctx, indent: string) {
 
 function statement(node: Node, ctx: Ctx): string {
   const d = data(node);
-  if (d.stmt) return d.stmt.endsWith(";") || node.type === "decision" ? d.stmt : `${d.stmt};`;
+  // Guard against junk statements (e.g. comment fragments a stale parse turned
+  // into nodes) — fall through to the DECLARE placeholder instead.
+  const valid = d.stmt && /^[A-Za-z$]/.test(d.stmt.trim());
+  if (d.stmt && valid) return d.stmt.endsWith(";") || node.type === "decision" ? d.stmt : `${d.stmt};`;
   if (node.type === "end") return "return;";
   // Placeholder for blocks added on the canvas that have no MDL yet.
   const name = `$NewValue${++ctx.synth}`;

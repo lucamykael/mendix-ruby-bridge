@@ -96,6 +96,8 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
       return;
     }
     if (l.startsWith("@")) return;
+    // Skip comment lines — they must not become flow blocks.
+    if (l.startsWith("//") || l.startsWith("/*") || l.startsWith("*") || l === "/" || l.endsWith("*/")) return;
     buf += (buf ? " " : "") + l;
     if (/;$/.test(l) || /\bthen$/.test(l) || /^else$/.test(l) || /^end if;?$/.test(l) || /^if\b.*\bthen$/.test(buf)) {
       flush(buf);

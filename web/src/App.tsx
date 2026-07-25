@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Tree, { type Selection } from "./components/Tree";
 import Canvas from "./components/Canvas";
 import Detail from "./components/Detail";
-import Marketplace from "./components/Marketplace";
-import Toolbox from "./components/Toolbox";
 import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
 import Drafts from "./components/Drafts";
+import RightPanel from "./components/RightPanel";
+import type { EditableNode } from "./components/PageBuilder";
+import AppTerminal, { type TerminalMode } from "./components/AppTerminal";
+import LoginModal from "./components/LoginModal";
+import SettingsModal from "./components/SettingsModal";
+import NewElementModal from "./components/NewElementModal";
+import QueryPanel from "./components/QueryPanel";
+import type { FlowAction } from "./components/Toolbox";
 import { loadHealth, loadInventory } from "./model/data";
 import { git, type GitStatus } from "./model/api";
 import { collectAssocs } from "./model/er";
@@ -14,10 +20,9 @@ import type { BackendHealth, Inventory, TreeNode } from "./model/types";
 import "./themes.css";
 import "./App.css";
 
-type View = "explorer" | "marketplace" | "git" | "er" | "drafts";
+type View = "explorer" | "git" | "er" | "drafts";
+type BottomTab = "details" | "changes" | "errors" | "console" | "oql" | "find" | "variables" | "debugger" | "breakpoints";
 
-// Studio Pro-style Changes pane: current branch + working-tree state from the
-// guarded git workflow.
 function ChangesPane() {
   const [status, setStatus] = useState<GitStatus>();
   const [error, setError] = useState<string>();
@@ -41,10 +46,70 @@ function ChangesPane() {
   );
 }
 
-// Ruby is the default look; Studio Pro and the editor palettes remain
-// selectable. Keep the default id in sync with the localStorage fallback below.
-const DEFAULT_THEME = "ruby";
+interface Violation {
+  ruleId?: string; severity?: string; message?: string;
+  module?: string; document?: string; documentType?: string; qn?: string; suggestion?: string;
+}
 
+function ErrorsPane({ onOpen }: { onOpen?: (qn: string) => void }) {
+  const [violations, setViolations] = useState<Violation[]>();
+  const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
+
+  const run = useCallback(async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const r = await fetch("/api/errors");
+      const body = (await r.json()) as { ok?: boolean; violations?: Violation[]; message?: string; error?: string };
+      if (r.ok && body.ok) setViolations(body.violations ?? []);
+      else setError(body.message ?? body.error ?? `HTTP ${r.status}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void run(); }, [run]);
+
+  return (
+    <div className="detail-drawer console-pane errors-pane">
+      <div className="errors-head">
+        <span>Project consistency check <span className="muted">(mxcli lint)</span></span>
+        <button className="editor-secondary" onClick={() => void run()} disabled={loading}>
+          {loading ? "Checking…" : "↻ Re-check"}
+        </button>
+      </div>
+      {error && <p className="pb-err">{error}</p>}
+      {violations && violations.length === 0 && !error && (
+        <p className="pb-ok">No consistency issues found. ✓</p>
+      )}
+      {violations && violations.length > 0 && (
+        <div className="errors-list">
+          {violations.map((v, i) => (
+            <div
+              key={i}
+              className={`error-row sev-${v.severity ?? "warning"}` + (v.qn ? " clickable" : "")}
+              onClick={() => v.qn && onOpen?.(v.qn)}
+              title={v.qn ? `Open ${v.qn}` : undefined}
+            >
+              <span className={`error-sev sev-${v.severity ?? "warning"}`}>{v.severity ?? "warning"}</span>
+              <span className="error-rule">{v.ruleId}</span>
+              <span className="error-msg">
+                {v.message}
+                {v.qn && <span className="error-qn"> · {v.qn}</span>}
+                {v.suggestion && <span className="error-fix"> — {v.suggestion}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DEFAULT_THEME = "ruby";
 const THEMES = [
   { id: "ruby", label: "Ruby" },
   { id: "studio-pro", label: "Studio Pro" },
@@ -53,13 +118,37 @@ const THEMES = [
   { id: "gruvbox", label: "Gruvbox" },
   { id: "catppuccin", label: "Catppuccin" },
 ];
+const LIGHT_SUFFIX = "-light";
+function isDark(theme: string) { return !theme.endsWith(LIGHT_SUFFIX); }
+function toggleThemeMode(theme: string) {
+  return isDark(theme) ? theme + LIGHT_SUFFIX : theme.replace(LIGHT_SUFFIX, "");
+}
 
-// Studio Pro shows the System module last; real creation order is not in the
-// inventory, so we approximate by pinning System to the bottom (stable otherwise).
 function orderModules(tree: TreeNode[]): TreeNode[] {
   const rest = tree.filter((n) => !(n.type === "module" && n.label === "System"));
   const system = tree.filter((n) => n.type === "module" && n.label === "System");
   return [...rest, ...system];
+}
+
+type DraftStatus = Map<string, "valid" | "blocked">;
+
+async function loadDraftStatus(): Promise<DraftStatus> {
+  try {
+    const r = await fetch("/api/drafts");
+    if (!r.ok) return new Map();
+    const data = (await r.json()) as {
+      pages: Record<string, { valid?: boolean }>;
+      flows?: Record<string, { valid?: boolean }>;
+    };
+    const m: DraftStatus = new Map();
+    for (const [qn, d] of Object.entries(data.pages ?? {}))
+      m.set(qn, d.valid !== false ? "valid" : "blocked");
+    for (const [qn, d] of Object.entries(data.flows ?? {}))
+      m.set(qn, d.valid !== false ? "valid" : "blocked");
+    return m;
+  } catch {
+    return new Map();
+  }
 }
 
 export default function App() {
@@ -67,14 +156,76 @@ export default function App() {
   const [error, setError] = useState<string>();
   const [health, setHealth] = useState<BackendHealth>();
   const [sel, setSel] = useState<Selection>();
+  // Studio Pro-style document tabs: every opened element stays in a tab
+  // until it's explicitly closed; selecting activates or appends its tab.
+  const [openTabs, setOpenTabs] = useState<Selection[]>([]);
+  const openDoc = useCallback((s: Selection) => {
+    setSel(s);
+    setOpenTabs((tabs) =>
+      tabs.some((t) => t.qn === s.qn)
+        ? tabs.map((t) => (t.qn === s.qn ? s : t))
+        : [...tabs, s],
+    );
+  }, []);
+  const closeDoc = (qn: string) => {
+    const idx = openTabs.findIndex((t) => t.qn === qn);
+    const next = openTabs.filter((t) => t.qn !== qn);
+    setOpenTabs(next);
+    if (sel?.qn === qn) setSel(next[Math.min(Math.max(idx, 0), next.length - 1)]);
+  };
   const [view, setView] = useState<View>("explorer");
-  const [bottomTab, setBottomTab] = useState<"details" | "changes" | "errors" | "console">();
+  const [bottomTab, setBottomTab] = useState<BottomTab>();
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? DEFAULT_THEME);
+  const [erModule, setErModule] = useState<string>();
+  const [draftQns, setDraftQns] = useState<DraftStatus>(new Map());
+  const [terminalMode, setTerminalMode] = useState<TerminalMode>("hidden");
+  const [appRunning, setAppRunning] = useState(false);
+  const [appBusy, setAppBusy] = useState(false);
+  const [pageWidget, setPageWidget] = useState<EditableNode | undefined>();
+  const pageWidgetChangeFn = useRef<((p: string) => void) | undefined>(undefined);
+  const handleWidgetSelect = useCallback(
+    (node: EditableNode | undefined, changeFn: ((p: string) => void) | undefined) => {
+      setPageWidget(node);
+      pageWidgetChangeFn.current = changeFn;
+    },
+    [],
+  );
+  const handleWidgetChange = useCallback((props: string) => pageWidgetChangeFn.current?.(props), []);
+  const [showLogin, setShowLogin] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [newElementKind, setNewElementKind] = useState<string>();
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [authUser, setAuthUser] = useState<string | null>(null);
+  const [appPort, setAppPort] = useState(8080);
 
   useEffect(() => {
     loadInventory().then(setInv).catch((e) => setError(String(e)));
-    loadHealth().then(setHealth).catch(() => setHealth(undefined));
+    loadHealth().then((h) => {
+      setHealth(h);
+      if (h.app?.running) { setAppRunning(true); setTerminalMode("docked"); }
+      if (h.auth?.logged_in) { setLoggedIn(true); setAuthUser(h.auth.username ?? null); }
+    }).catch(() => setHealth(undefined));
+    loadDraftStatus().then(setDraftQns).catch(() => null);
+    fetch("/api/settings")
+      .then((r) => r.json() as Promise<{ settings?: { APP_PORT?: string } }>)
+      .then((d) => { const p = parseInt(d.settings?.APP_PORT ?? ""); if (p > 0) setAppPort(p); })
+      .catch(() => null);
   }, []);
+
+  // Keep appRunning truthful even when the console isn't visible (the
+  // terminal's log poller is the primary source, but it only runs while
+  // docked/floating). Poll the status endpoint while we believe the app is up.
+  useEffect(() => {
+    if (!appRunning) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch("/api/app/status");
+        const s = (await r.json()) as { running?: boolean };
+        if (!s.running) setAppRunning(false);
+      } catch { /* backend unreachable — keep current state */ }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [appRunning]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -83,6 +234,94 @@ export default function App() {
 
   const assocs = useMemo(() => (inv ? collectAssocs(inv.details) : []), [inv]);
   const tree = useMemo(() => (inv ? orderModules(inv.tree) : []), [inv]);
+  const moduleNames = useMemo(
+    () => tree.filter((n) => n.type === "module").map((n) => n.label),
+    [tree],
+  );
+
+  // Callable actions (Java/JS actions + micro/nanoflows) from the inventory,
+  // surfaced as draggable flow blocks. Installed modules (e.g. OQL) appear here.
+  const flowActions = useMemo<FlowAction[]>(() => {
+    if (!inv) return [];
+    const acts: FlowAction[] = [];
+    const kinds = new Set(["javaaction", "javascriptaction", "microflow", "nanoflow"]);
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (kinds.has(n.type) && n.qualifiedName) {
+          acts.push({
+            qn: n.qualifiedName,
+            label: n.label || n.qualifiedName.split(".").pop() || n.qualifiedName,
+            module: n.qualifiedName.split(".")[0],
+            kind: n.type as FlowAction["kind"],
+          });
+        }
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(inv.tree);
+    return acts;
+  }, [inv]);
+
+  // Persistable entity qualified names — used by the OQL↔SQL converter to map
+  // Module.Entity references to/from their database table names.
+  const entityQns = useMemo<string[]>(() => {
+    if (!inv) return [];
+    const qns: string[] = [];
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (n.type === "entity" && n.qualifiedName) qns.push(n.qualifiedName);
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(inv.tree);
+    return qns;
+  }, [inv]);
+
+  // Compact project summary handed to the AI chat so it can reason about (and
+  // modify) the actual project — modules, entities, pages, microflows.
+  const aiContext = useMemo<string>(() => {
+    if (!inv) return "";
+    const by: Record<string, string[]> = {};
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (n.qualifiedName && ["entity", "page", "microflow", "nanoflow", "enumeration"].includes(n.type)) {
+          (by[n.type] ??= []).push(n.qualifiedName);
+        }
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(inv.tree);
+    const line = (label: string, key: string) =>
+      by[key]?.length ? `${label} (${by[key].length}): ${by[key].slice(0, 40).join(", ")}${by[key].length > 40 ? ", …" : ""}` : "";
+    return [
+      `Modules: ${moduleNames.join(", ")}`,
+      line("Entities", "entity"),
+      line("Pages", "page"),
+      line("Microflows", "microflow"),
+      line("Nanoflows", "nanoflow"),
+      line("Enumerations", "enumeration"),
+    ].filter(Boolean).join("\n");
+  }, [inv, moduleNames]);
+
+  // Studio Pro-style creation shortcuts (Alt-based — browsers reserve
+  // Ctrl+N/T/W and pages cannot intercept them). Ignored while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName ?? "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+      const kinds: Record<string, string> = {
+        n: "page", p: "page", m: "module", l: "microflow", e: "entity",
+      };
+      const kind = kinds[e.key.toLowerCase()];
+      if (!kind) return;
+      e.preventDefault();
+      setNewElementKind(kind);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const selectByQn = (qn: string) => {
     if (!inv) return;
@@ -94,8 +333,15 @@ export default function App() {
       }
     };
     walk(inv.tree);
-    setSel(found ?? { qn, type: inv.details[qn]?.kind ?? "element", label: qn.split(".").pop() ?? qn });
+    openDoc(found ?? { qn, type: inv.details[qn]?.kind ?? "element", label: qn.split(".").pop() ?? qn });
   };
+
+  const openDomainModel = (moduleName: string) => {
+    setErModule(moduleName);
+    setView("er");
+  };
+
+  const refreshDrafts = () => loadDraftStatus().then(setDraftQns).catch(() => null);
 
   if (error) return (
     <div className="startup-state">
@@ -114,38 +360,147 @@ export default function App() {
   const detail = sel ? inv.details[sel.qn] : undefined;
   const incoming = sel ? inv.dependencies.edges.filter((edge) => edge.to === sel.qn) : [];
   const outgoing = sel ? inv.dependencies.edges.filter((edge) => edge.from === sel.qn) : [];
-  const showToolbox = view === "explorer";
+
+  const projectName = meta.source_project?.split("/").pop()?.replace(/\.mpr$/, "") ?? "Mendix Bridge";
+
+  const BOTTOM_TABS: Array<{ id: BottomTab; label: string; stub?: boolean }> = [
+    { id: "details", label: "Details" },
+    { id: "changes", label: "Changes" },
+    { id: "errors", label: "Errors" },
+    { id: "console", label: "Console" },
+    { id: "oql", label: "OQL / SQL" },
+    { id: "find", label: "Find Results" },
+    { id: "variables", label: "Variables", stub: true },
+    { id: "debugger", label: "Debugger", stub: true },
+    { id: "breakpoints", label: "Breakpoints", stub: true },
+  ];
 
   return (
     <div className="app">
-      <header>
-        <span className="app-name">
+      <header className="app-header">
+        <span className="app-logo">
           <img src="/brand/mendix-ruby-bridge.png" alt="Mendix Ruby Bridge" />
-          <span>{meta.source_project?.split("/").pop()?.replace(/\.mpr$/, "") ?? "Mendix Bridge"}</span>
         </span>
+
         <nav className="tabs">
           <button className={view === "explorer" ? "on" : ""} onClick={() => setView("explorer")}>App Explorer</button>
           <button className={view === "er" ? "on" : ""} onClick={() => setView("er")}>ER Diagram</button>
-          <button className={view === "marketplace" ? "on" : ""} onClick={() => setView("marketplace")}>Marketplace</button>
-          <button className={view === "drafts" ? "on" : ""} onClick={() => setView("drafts")}>Drafts</button>
+          <button className={view === "drafts" ? "on" : ""} onClick={() => { setView("drafts"); refreshDrafts(); }}>Drafts</button>
           {health?.capabilities?.git && (
             <button className={view === "git" ? "on" : ""} onClick={() => setView("git")}>Git</button>
           )}
         </nav>
+
+        <span className="header-project">{projectName}</span>
+
         <span className="spacer" />
+
+        <div className="header-actions">
+          <button
+            className="hdr-btn"
+            title="Add new element — Alt+N page · Alt+M module · Alt+L microflow · Alt+E entity"
+            onClick={() => setNewElementKind("page")}
+          >
+            ＋ New
+          </button>
+          <button
+            className="hdr-btn hdr-run"
+            title={health?.capabilities?.app_run ? (appRunning ? "Restart application" : "Run application") : "Configure MRB_RUN_CMD to enable"}
+            disabled={!health?.capabilities?.app_run || appBusy}
+            onClick={async () => {
+              setAppBusy(true);
+              try {
+                if (appRunning) {
+                  await fetch("/api/app/stop", { method: "POST" });
+                  setTerminalMode("docked");
+                  // Docker teardown is async on the backend — wait until the
+                  // status endpoint reports the app actually stopped.
+                  for (let i = 0; i < 60; i++) {
+                    await new Promise((r) => setTimeout(r, 2000));
+                    try {
+                      const s = await fetch("/api/app/status");
+                      const st = (await s.json()) as { running?: boolean };
+                      if (!st.running) break;
+                    } catch { break; }
+                  }
+                }
+                const r = await fetch("/api/app/run", { method: "POST" });
+                setTerminalMode("docked");
+                setAppRunning(r.ok || r.status === 409);
+              } finally {
+                setAppBusy(false);
+              }
+            }}
+          >
+            {appBusy ? "⟳ …" : appRunning ? "↺ Re-Run" : "▶ Run"}
+          </button>
+          <button
+            className="hdr-btn hdr-stop"
+            title="Stop application"
+            disabled={!appRunning || appBusy}
+            onClick={async () => {
+              await fetch("/api/app/stop", { method: "POST" });
+              // Show the teardown in the console; the pollers flip the
+              // buttons back once the backend reports the app stopped.
+              setTerminalMode("docked");
+            }}
+          >
+            ■ Stop
+          </button>
+          <button
+            className="hdr-btn hdr-view"
+            title={appRunning ? "View running application" : "Application is not running"}
+            disabled={!appRunning}
+            onClick={() => window.open(`http://localhost:${appPort}`, "_blank")}
+          >
+            ⊞ View
+          </button>
+          {terminalMode === "minimized" && (
+            <button
+              className="hdr-btn hdr-term"
+              title="Show application console"
+              onClick={() => setTerminalMode("docked")}
+            >
+              {appRunning ? "▶" : "■"} Console
+            </button>
+          )}
+          <button
+            className={`hdr-btn hdr-login ${loggedIn ? "hdr-login-on" : ""}`}
+            title={loggedIn ? `Logged in as ${authUser ?? ""}` : "Login to Mendix"}
+            onClick={() => setShowLogin(true)}
+          >
+            👤{loggedIn && <span className="hdr-login-user">{authUser?.split("@")[0]}</span>}
+          </button>
+          <button
+            className="hdr-btn hdr-settings"
+            title="Project settings"
+            onClick={() => setShowSettings(true)}
+          >
+            ⚙
+          </button>
+        </div>
+
         <label className="theme-pick">
           Theme
-          <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+          <select
+            value={isDark(theme) ? theme : theme.replace(LIGHT_SUFFIX, "")}
+            onChange={(e) => setTheme(isDark(theme) ? e.target.value : e.target.value + LIGHT_SUFFIX)}
+          >
             {THEMES.map((t) => (
               <option key={t.id} value={t.id}>{t.label}</option>
             ))}
           </select>
+          <button
+            className="theme-mode-btn"
+            title={isDark(theme) ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={() => setTheme(toggleThemeMode(theme))}
+          >
+            {isDark(theme) ? "☀" : "☾"}
+          </button>
         </label>
       </header>
 
-      {view === "marketplace" ? (
-        <Marketplace />
-      ) : view === "git" ? (
+      {view === "git" ? (
         <GitPanel />
       ) : view === "drafts" ? (
         <Drafts
@@ -160,6 +515,7 @@ export default function App() {
           tree={tree}
           details={inv.details}
           assocs={assocs}
+          initialModule={erModule}
           onOpenEntity={(qn) => {
             selectByQn(qn);
             setView("explorer");
@@ -168,26 +524,45 @@ export default function App() {
       ) : (
         <div className="layout">
           <aside>
-            <Tree tree={tree} hasDetail={(qn) => !!inv.details[qn]} selected={sel?.qn} onSelect={setSel} />
+            <Tree
+              tree={tree}
+              hasDetail={(qn) => !!inv.details[qn]}
+              selected={sel?.qn}
+              onSelect={openDoc}
+              details={inv.details}
+              draftQns={draftQns}
+              onOpenDomainModel={openDomainModel}
+            />
           </aside>
+
           <main>
             {!sel && <p className="empty pad">Select an element to explore it.</p>}
             {sel && detail && (
               <>
                 <div className="doc-tabs">
-                  <div className="doc-tab on">
-                    <span className="doc-tab-label">
-                      {sel.label} <span className="doc-tab-module">[{sel.qn.split(".")[0]}]</span>
-                    </span>
-                    <button className="doc-tab-close" title="Close" onClick={() => setSel(undefined)}>×</button>
-                  </div>
+                  {openTabs.map((t) => (
+                    <div
+                      key={t.qn}
+                      className={"doc-tab" + (t.qn === sel.qn ? " on" : "")}
+                      onClick={() => setSel(t)}
+                    >
+                      <span className="doc-tab-label">
+                        {t.label} <span className="doc-tab-module">[{t.qn.split(".")[0]}]</span>
+                      </span>
+                      <button
+                        className="doc-tab-close"
+                        title="Close"
+                        onClick={(e) => { e.stopPropagation(); closeDoc(t.qn); }}
+                      >×</button>
+                    </div>
+                  ))}
                 </div>
                 <div className="editor-bar">
                   <span className="editor-kind">{sel.type}</span>
                   <span className="editor-qn">{sel.qn}</span>
                 </div>
                 <div className="editor-body">
-                  <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
+                  <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} onWidgetSelect={handleWidgetSelect} />
                 </div>
                 {bottomTab === "details" && (
                   <div className="detail-drawer">
@@ -201,19 +576,37 @@ export default function App() {
                   </div>
                 )}
                 {bottomTab === "changes" && <ChangesPane />}
-                {bottomTab === "errors" && (
+                {bottomTab === "oql" && <QueryPanel entities={entityQns} />}
+                {bottomTab === "errors" && <ErrorsPane onOpen={selectByQn} />}
+                {bottomTab === "find" && (
                   <div className="detail-drawer console-pane">
-                    <p className="muted">No consistency errors reported. Run `mx check` via the guarded workflow for a full report.</p>
+                    <p className="muted">No active search. Use filter in App Explorer to find elements.</p>
+                  </div>
+                )}
+                {bottomTab === "variables" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">Variables inspector — available during debug session.</p>
+                  </div>
+                )}
+                {bottomTab === "debugger" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">Debugger — connect a running Mendix app to inspect execution.</p>
+                  </div>
+                )}
+                {bottomTab === "breakpoints" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">No breakpoints set.</p>
                   </div>
                 )}
                 <div className="console-bar">
-                  {(["details", "changes", "errors", "console"] as const).map((tab) => (
+                  {BOTTOM_TABS.map(({ id, label, stub }) => (
                     <button
-                      key={tab}
-                      className={bottomTab === tab ? "on" : ""}
-                      onClick={() => setBottomTab((current) => (current === tab ? undefined : tab))}
+                      key={id}
+                      className={(bottomTab === id ? "on" : "") + (stub ? " stub" : "")}
+                      onClick={() => setBottomTab((cur) => (cur === id ? undefined : id))}
+                      title={stub ? `${label} — coming soon` : label}
                     >
-                      {tab[0].toUpperCase() + tab.slice(1)}
+                      {label}
                     </button>
                   ))}
                   <span className="spacer" />
@@ -222,8 +615,48 @@ export default function App() {
               </>
             )}
           </main>
-          {showToolbox && <Toolbox context={sel?.type} />}
+
+          <RightPanel
+            context={sel?.type}
+            selection={sel}
+            detail={detail}
+            widgetNode={pageWidget}
+            onWidgetChange={handleWidgetChange}
+            flowActions={flowActions}
+            onLogin={() => setShowLogin(true)}
+            loggedIn={loggedIn}
+            aiContext={aiContext}
+          />
         </div>
+      )}
+
+      <AppTerminal
+        mode={terminalMode}
+        onModeChange={setTerminalMode}
+        running={appRunning}
+        onRunningChange={setAppRunning}
+      />
+
+      {showLogin && (
+        <LoginModal
+          onClose={() => setShowLogin(false)}
+          onAuthChange={(s) => { setLoggedIn(s.logged_in); setAuthUser(s.username); }}
+        />
+      )}
+
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {newElementKind && (
+        <NewElementModal
+          initialKind={newElementKind}
+          modules={moduleNames}
+          onClose={() => setNewElementKind(undefined)}
+          onCreated={() => {
+            setNewElementKind(undefined);
+            // The backend refreshes the inventory in the background —
+            // re-fetch after it has had time to describe the new element.
+            setTimeout(() => { loadInventory().then(setInv).catch(() => null); }, 6000);
+          }}
+        />
       )}
 
       <footer className="statusbar">
