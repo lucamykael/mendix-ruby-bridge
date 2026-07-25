@@ -11,6 +11,7 @@ interface RawNode {
   id: number;
   kind: FlowKind;
   label: string;
+  stmt: string | null; // original MDL statement (or decision expression), for round-trip
   x: number | null;
   y: number | null;
 }
@@ -30,9 +31,9 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
   const nodes: RawNode[] = [];
   const edges: RawEdge[] = [];
   let counter = 0;
-  const add = (kind: FlowKind, label: string, pos: { x: number; y: number } | null) => {
+  const add = (kind: FlowKind, label: string, pos: { x: number; y: number } | null, stmt: string | null = null) => {
     const id = counter++;
-    nodes.push({ id, kind, label: clip(label, 46), x: pos ? pos.x : null, y: pos ? pos.y : null });
+    nodes.push({ id, kind, label: clip(label, 46), stmt, x: pos ? pos.x : null, y: pos ? pos.y : null });
     return id;
   };
   const startId = add("terminal", "Start", null);
@@ -55,7 +56,7 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
     if (!t) return;
     if (/^if\b/.test(t)) {
       const expr = t.replace(/^if\s+/, "").replace(/\s+then$/, "");
-      const id = add("decision", caption || expr, pos);
+      const id = add("decision", caption || expr, pos, expr);
       connect(id);
       pos = null;
       caption = null;
@@ -74,7 +75,7 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
     } else if (/^(begin|end)\b/.test(t) || t.startsWith("@")) {
       // annotations handled elsewhere
     } else {
-      const id = add(kindOf(t), caption || t, pos);
+      const id = add(kindOf(t), caption || t, pos, t);
       connect(id);
       pos = null;
       caption = null;
@@ -158,7 +159,7 @@ export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null 
     id: String(n.id),
     type: nodeType(n),
     position: { x: ((n.x as number) - minX) * sx, y: ((n.y as number) - minY) * sy },
-    data: { label: n.label, kind: n.kind },
+    data: { label: n.label, kind: n.kind, stmt: n.stmt },
   }));
   const edges: Edge[] = g.edges.map((e, i) => ({
     id: `e${i}`,

@@ -6,7 +6,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { flowGraph } from "../model/flow";
-import { saveLayout, type NodePosition } from "../model/api";
+import { flowBodyMdl } from "../model/flowMdl";
+import { saveFlow, saveLayout, type NodePosition } from "../model/api";
 import { nodeTypes } from "./nodes";
 
 // Studio Pro-like microflow editor: horizontal flow, a shortcut toolbar on top,
@@ -188,6 +189,16 @@ function PersistedFlowInner({ qn, mdl, savedPositions, parameters = [] }: Props)
         {status && <span className="muted">{status}</span>}
         <button className="w-btn" disabled={!dirty} onClick={onSave}>
           Save layout
+        </button>
+        <button
+          className="w-btn"
+          title="Serialize the canvas to microflow MDL, validate it, and save a draft"
+          onClick={async () => {
+            const result = await saveFlow(qn, flowBodyMdl(nodes, edges));
+            setStatus(result.message);
+          }}
+        >
+          Save flow
         </button>
       </div>
       <div className="canvas">

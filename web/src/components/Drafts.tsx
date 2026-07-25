@@ -21,6 +21,7 @@ interface PageDraft {
 interface DraftsPayload {
   entities: Record<string, EntityDraft>;
   pages: Record<string, PageDraft>;
+  flows?: Record<string, PageDraft>;
 }
 
 export default function Drafts({ onOpen }: { onOpen: (qn: string) => void }) {
@@ -73,6 +74,14 @@ export default function Drafts({ onOpen }: { onOpen: (qn: string) => void }) {
       <h3>Page drafts</h3>
       {pages.length === 0 && <p className="empty">No page drafts yet — use "Save page" in the page builder.</p>}
       {pages.map(([qn, d]) => card(qn, d.saved_at, d.valid !== false, d.message, d.mdl))}
+
+      <h3>Flow drafts</h3>
+      {Object.keys(data.flows ?? {}).length === 0 && (
+        <p className="empty">No flow drafts yet — use "Save flow" in the microflow editor.</p>
+      )}
+      {Object.entries(data.flows ?? {}).map(([qn, d]) =>
+        card(qn, d.saved_at, d.valid !== false, d.message, d.mdl),
+      )}
 
       <h3>Entity drafts</h3>
       {entities.length === 0 && <p className="empty">No entity drafts yet — use "Edit entity" on a parsed entity.</p>}

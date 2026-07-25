@@ -78,6 +78,7 @@ module MendixBridge
       end
       @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
       @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
+      @server.mount_proc("/api/flow") { |request, response| flow_route(request, response) }
       @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
       @server.mount_proc("/api/marketplace/install") do |request, response|
         marketplace_install(request, response)
@@ -125,7 +126,8 @@ module MendixBridge
             visual_entity_plans: true,
             marketplace_install: source_project ? true : false,
             git: git_workflow ? true : false,
-            page_drafts: true
+            page_drafts: true,
+            flow_drafts: true
           }
         }
       )
@@ -371,16 +373,58 @@ module MendixBridge
       json(response, { error: "invalid JSON payload" }, status: 400)
     end
 
+    # Accepts a rebuilt microflow/nanoflow body from the flow editor, wraps it in
+    # CREATE OR MODIFY MICROFLOW/NANOFLOW using the imported signature, validates
+    # with `mxcli check`, and saves a reviewable draft — same contract as pages.
+    def flow_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      qn = payload.fetch("qn")
+      body = payload.fetch("body").to_s
+      detail = page_detail(qn)
+      return json(response, { error: "unknown flow" }, status: 404) unless detail
+
+      mdl = build_flow_mdl(qn, detail, body)
+      ok, message = check_mdl(mdl)
+      persist_draft("flow-plans.json", qn, "body" => body, "mdl" => mdl, "valid" => ok, "message" => message)
+      json(
+        response,
+        { ok:, mdl:, message: ok ? "Flow MDL validated and draft saved." : message },
+        status: ok ? 200 : 422
+      )
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    def build_flow_mdl(qn, detail, body)
+      keyword = detail["mdl"].to_s.match?(/\bnanoflow\b/i) ? "NANOFLOW" : "MICROFLOW"
+      params = Array(detail["parameters"]).map do |parameter|
+        "$#{parameter['name']}: #{parameter['type']}"
+      end
+      header = +"CREATE OR MODIFY #{keyword} #{qn} (#{params.join(', ')})"
+      header << "\nRETURNS #{detail['return_type']}" if detail["return_type"]
+      header << "\nFOLDER '#{escape_mdl(detail['folder'])}'" if detail["folder"]
+      indented = body.strip.empty? ? "" : body.lines.map { |line| line.rstrip }.join("\n")
+      "#{header}\nBEGIN\n#{indented}\nEND;\n"
+    end
+
     # Lists the reviewable drafts saved by the visual builders so the viewer can
     # surface them (they only exist as inventory sidecars otherwise).
     def drafts(response)
-      entity_path = File.join(@inventory_dir, "inventory", "visual-plans.json")
-      page_path = File.join(@inventory_dir, "inventory", "page-plans.json")
+      read = lambda do |file|
+        path = File.join(@inventory_dir, "inventory", file)
+        File.file?(path) ? JSON.parse(File.read(path)) : {}
+      end
       json(
         response,
         {
-          entities: File.file?(entity_path) ? JSON.parse(File.read(entity_path)) : {},
-          pages: File.file?(page_path) ? JSON.parse(File.read(page_path)) : {}
+          entities: read.call("visual-plans.json"),
+          pages: read.call("page-plans.json"),
+          flows: read.call("flow-plans.json")
         }
       )
     end
@@ -482,16 +526,18 @@ module MendixBridge
     end
 
     def persist_page_draft(qn, content, mdl, ok, message)
-      path = File.join(@inventory_dir, "inventory", "page-plans.json")
+      persist_draft(
+        "page-plans.json", qn,
+        "content" => content, "mdl" => mdl, "valid" => ok, "message" => message
+      )
+    end
+
+    # Atomic upsert into a draft sidecar under inventory/ (temp + rename, mutex).
+    def persist_draft(file, qn, entry)
+      path = File.join(@inventory_dir, "inventory", file)
       @layout_mutex.synchronize do
         plans = File.file?(path) ? JSON.parse(File.read(path)) : {}
-        plans[qn] = {
-          "saved_at" => Time.now.iso8601,
-          "content" => content,
-          "mdl" => mdl,
-          "valid" => ok,
-          "message" => message
-        }.compact
+        plans[qn] = { "saved_at" => Time.now.iso8601 }.merge(entry.compact)
         temporary = "#{path}.tmp"
         File.write(temporary, "#{JSON.pretty_generate(plans)}\n")
         File.rename(temporary, path)
