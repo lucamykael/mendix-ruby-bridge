@@ -1,18 +1,20 @@
 import { useEffect, useState } from "react";
 import { searchMarketplace, installMarketplaceItem, type MarketplaceItem } from "../model/api";
 
-function ItemModal({ item, onClose }: { item: MarketplaceItem; onClose: () => void }) {
+function ItemModal({ item, onClose, onLogin }: { item: MarketplaceItem; onClose: () => void; onLogin?: () => void }) {
   const [studioClosed, setStudioClosed] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [toast, setToast] = useState<string>();
+  const [needsLogin, setNeedsLogin] = useState(false);
 
   const install = async () => {
     setInstalling(true);
+    setNeedsLogin(false);
     const result = await installMarketplaceItem(item.id, item.latestVersion, studioClosed);
     setInstalling(false);
     setToast(result.message);
     if (result.ok) setTimeout(() => window.location.reload(), 1800);
-    else setTimeout(() => setToast(undefined), 6000);
+    else if (/log in/i.test(result.message)) setNeedsLogin(true);
   };
 
   return (
@@ -43,57 +45,72 @@ function ItemModal({ item, onClose }: { item: MarketplaceItem; onClose: () => vo
           Studio Pro is closed
         </label>
 
-        {toast && <div className={toast.startsWith("Error") || toast.includes("fail") ? "git-error" : "git-notice"}>{toast}</div>}
+        {toast && <div className={/fail|error|log in/i.test(toast) ? "git-error" : "git-notice"}>{toast}</div>}
 
         <div className="modal-actions">
           <button className="editor-secondary" onClick={onClose}>Cancel</button>
-          <button
-            className="w-btn"
-            disabled={!studioClosed || installing}
-            onClick={() => void install()}
-          >
-            {installing ? "Installing…" : "Install"}
-          </button>
+          {needsLogin && onLogin ? (
+            <button className="w-btn" onClick={onLogin}>👤 Log in</button>
+          ) : (
+            <button className="w-btn" disabled={!studioClosed || installing} onClick={() => void install()}>
+              {installing ? "Installing…" : "Install"}
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-export default function MarketplacePanel() {
+export default function MarketplacePanel({ onLogin, loggedIn }: { onLogin?: () => void; loggedIn?: boolean }) {
   const [q, setQ] = useState("");
   const [items, setItems] = useState<MarketplaceItem[]>([]);
-  const [mocked, setMocked] = useState(false);
+  const [source, setSource] = useState<"live" | "offline">("offline");
+  const [needsLogin, setNeedsLogin] = useState(false);
+  const [reachable, setReachable] = useState(true);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<MarketplaceItem>();
 
-  const run = async (query: string) => {
+  const run = async (query: string, refresh = false) => {
     setLoading(true);
-    const { data, mocked } = await searchMarketplace(query);
-    setItems(data);
-    setMocked(mocked);
+    const res = await searchMarketplace(query, 20, refresh);
+    setItems(res.items);
+    setSource(res.source);
+    setNeedsLogin(res.needsLogin);
+    setReachable(res.reachable);
     setLoading(false);
   };
 
-  useEffect(() => { void run(""); }, []);
+  // Re-run once the user logs in, so results switch to live automatically.
+  useEffect(() => { void run(q); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [loggedIn]);
 
   return (
     <div className="mp-panel">
       <form
         className="mp-search-row"
-        onSubmit={(e) => { e.preventDefault(); void run(q); }}
+        onSubmit={(e) => { e.preventDefault(); void run(q, true); }}
       >
         <input
           type="search"
-          placeholder="Search marketplace…"
+          placeholder="Search the Mendix marketplace…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         <button type="submit">Go</button>
       </form>
 
-      {mocked && (
-        <span className="mock-badge mp-mock">offline sample</span>
+      {source === "live" ? (
+        <div className="mp-source mp-source-live">● Live Mendix marketplace</div>
+      ) : (
+        <div className="mp-source mp-source-offline">
+          {reachable ? "Offline catalog" : "Backend offline — sample data"}
+          {needsLogin && onLogin && (
+            <>
+              {" · "}
+              <button className="mp-login-link" onClick={onLogin}>Log in for live search</button>
+            </>
+          )}
+        </div>
       )}
 
       {loading ? (
@@ -120,7 +137,7 @@ export default function MarketplacePanel() {
         </div>
       )}
 
-      {selected && <ItemModal item={selected} onClose={() => setSelected(undefined)} />}
+      {selected && <ItemModal item={selected} onClose={() => setSelected(undefined)} onLogin={onLogin} />}
     </div>
   );
 }

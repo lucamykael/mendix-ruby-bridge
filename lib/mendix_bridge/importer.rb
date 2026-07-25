@@ -89,10 +89,18 @@ module MendixBridge
       File.write(path, content) unless File.exist?(path)
     end
 
+    # One `mxcli describe` process per element, so a full refresh on a real
+    # project spawns hundreds of them — run a small worker pool. Open3 blocks
+    # in IO/waitpid, which releases the GVL, so threads give near-linear
+    # speedup here.
+    DESCRIBE_WORKERS = 8
+
     def describe_elements(project_file, inventory)
       details = {}
       warnings = []
+      mutex = Mutex.new
 
+      queue = Queue.new
       inventory.elements
         .select do |element|
           %w[
@@ -101,42 +109,55 @@ module MendixBridge
             projectsecurity modulerole userrole
           ].include?(element.type)
         end
-        .each do |element|
-          describe_type, describe_name = describe_target(element)
-          stdout, stderr, status = Open3.capture3(
-            @mxcli,
-            "--json",
-            "-p", project_file,
-            "describe", describe_type, describe_name
-          )
+        .each { |element| queue << element }
+      queue.close
 
-          unless status.success?
-            warnings << "#{element.qualified_name}: #{stderr.strip}"
-            next
-          end
+      workers = Array.new(DESCRIBE_WORKERS) do
+        Thread.new do
+          while (element = queue.pop)
+            describe_type, describe_name = describe_target(element)
+            begin
+              stdout, stderr, status = Open3.capture3(
+                @mxcli,
+                "--json",
+                "-p", project_file,
+                "describe", describe_type, describe_name
+              )
 
-          description = JSON.parse(stdout)
-          details[element.qualified_name] =
-            if %w[microflow nanoflow].include?(element.type)
-              MicroflowParser.parse(description)
-            elsif element.type == "enumeration"
-              EnumerationParser.parse(description)
-            elsif %w[
-              constant javaaction layout snippet importmapping exportmapping navprofile
-            ].include?(element.type)
-              DocumentParser.parse(element.type, description)
-            elsif element.type == "page"
-              PageParser.parse(description)
-            elsif %w[projectsecurity modulerole userrole].include?(element.type)
-              SecurityParser.parse(element.type, description)
-            else
-              DomainParser.parse(description)
+              unless status.success?
+                mutex.synchronize { warnings << "#{element.qualified_name}: #{stderr.strip}" }
+                next
+              end
+
+              parsed = parse_description(element, JSON.parse(stdout))
+              mutex.synchronize { details[element.qualified_name] = parsed }
+            rescue JSON::ParserError => error
+              mutex.synchronize { warnings << "#{element.qualified_name}: invalid JSON (#{error.message})" }
             end
-        rescue JSON::ParserError => error
-          warnings << "#{element.qualified_name}: invalid JSON (#{error.message})"
+          end
         end
+      end
+      workers.each(&:join)
 
       [details, warnings]
+    end
+
+    def parse_description(element, description)
+      if %w[microflow nanoflow].include?(element.type)
+        MicroflowParser.parse(description)
+      elsif element.type == "enumeration"
+        EnumerationParser.parse(description)
+      elsif %w[
+        constant javaaction layout snippet importmapping exportmapping navprofile
+      ].include?(element.type)
+        DocumentParser.parse(element.type, description)
+      elsif element.type == "page"
+        PageParser.parse(description)
+      elsif %w[projectsecurity modulerole userrole].include?(element.type)
+        SecurityParser.parse(element.type, description)
+      else
+        DomainParser.parse(description)
+      end
     end
 
     def describe_target(element)

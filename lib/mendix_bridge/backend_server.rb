@@ -89,8 +89,13 @@ module MendixBridge
       @server.mount_proc("/api/flow") { |request, response| flow_route(request, response) }
       @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
       @server.mount_proc("/api/apply") { |request, response| apply_draft_route(request, response) }
+      @server.mount_proc("/api/create") { |request, response| create_element_route(request, response) }
+      @server.mount_proc("/api/query") { |request, response| query_route(request, response) }
+      @server.mount_proc("/api/errors") { |_request, response| errors_route(response) }
+      @server.mount_proc("/api/mdl") { |request, response| mdl_route(request, response) }
       @server.mount_proc("/api/app") { |request, response| app_route(request, response) }
       @server.mount_proc("/api/auth") { |request, response| auth_route(request, response) }
+      @server.mount_proc("/api/settings") { |request, response| settings_route(request, response) }
       @server.mount_proc("/api/marketplace/install") do |request, response|
         marketplace_install(request, response)
       end
@@ -200,17 +205,69 @@ module MendixBridge
     def marketplace_search(request, response)
       query = request.query["q"].to_s
       limit = [[request.query["limit"].to_i, 1].max, 100].min
-      output = run_mxcli(
-        "marketplace", "search", query,
-        "--limit", limit.to_s,
-        "--json"
-      )
+      refresh = %w[1 true yes].include?(request.query["refresh"].to_s)
+
+      # Live search against the official Mendix marketplace via mxcli. The
+      # marketplace is entirely behind Mendix SSO, so this only works with a
+      # logged-in credential; --refresh bypasses mxcli's local catalog cache.
+      args = ["marketplace", "search", query, "--limit", limit.to_s, "--json"]
+      args << "--refresh" if refresh
+      output = run_mxcli(*args)
       data = JSON.parse(output)
-      json(response, normalize_marketplace(data))
+      json(response, { items: normalize_marketplace(data), source: "live" })
     rescue BackendServerError => error
+      # Not logged in (or mxcli failed): serve the bundled offline catalog so
+      # browsing still works. Flag it so the UI can invite the user to log in
+      # for the full live marketplace.
+      items = catalog_search(query, limit)
+      needs_login = auth_error?(error.message)
+      if items
+        return json(response, {
+          items: items, source: "offline", needs_login: needs_login,
+          message: needs_login ? "Log in to Mendix for live marketplace search." : nil
+        })
+      end
+
       json(response, { error: error.message }, status: 502)
     rescue JSON::ParserError
       json(response, { error: "mxcli returned invalid marketplace JSON" }, status: 502)
+    end
+
+    # True when an mxcli error is about a missing/expired credential.
+    def auth_error?(message)
+      message.to_s.match?(/no credential|auth login|not authenticated|unauthorized/i)
+    end
+
+    # Path of the offline marketplace catalog: refreshed copy in the inventory
+    # dir wins over the seed bundled with the gem. Override with
+    # MRB_MARKETPLACE_CATALOG.
+    def marketplace_catalog_path
+      [
+        ENV["MRB_MARKETPLACE_CATALOG"],
+        File.join(@inventory_dir, "marketplace_catalog.json"),
+        File.expand_path("../../data/marketplace_catalog.json", __dir__)
+      ].compact.find { |path| File.file?(path) }
+    end
+
+    def marketplace_catalog
+      path = marketplace_catalog_path
+      return nil unless path
+
+      data = JSON.parse(File.read(path))
+      data.is_a?(Array) ? data : data.fetch("items", [])
+    rescue JSON::ParserError
+      nil
+    end
+
+    def catalog_search(query, limit)
+      items = marketplace_catalog
+      return nil unless items
+
+      q = query.strip.downcase
+      hits = items.select do |item|
+        q.empty? || %w[name summary category publisher].any? { |k| item[k].to_s.downcase.include?(q) }
+      end
+      hits.first(limit).map { |item| normalize_marketplace_item(item) }
     end
 
     def entity_plan(request, response)
@@ -234,11 +291,22 @@ module MendixBridge
     def marketplace_item(request, response)
       id = request.path.delete_prefix("/api/marketplace/item/")
       return json(response, { error: "invalid marketplace id" }, status: 422) unless
-        id.match?(/\A\d+\z/)
+        id.match?(/\A[\w.-]+\z/)
+
+      # Offline catalog entries (non-numeric ids) resolve locally.
+      unless id.match?(/\A\d+\z/)
+        hit = (marketplace_catalog || []).find { |item| item["id"].to_s == id }
+        return json(response, normalize_marketplace_item(hit)) if hit
+
+        return json(response, { error: "unknown catalog id" }, status: 404)
+      end
 
       output = run_mxcli("marketplace", "info", id, "--json")
       json(response, normalize_marketplace_item(JSON.parse(output)))
     rescue BackendServerError => error
+      hit = (marketplace_catalog || []).find { |item| item["id"].to_s == id }
+      return json(response, normalize_marketplace_item(hit)) if hit
+
       json(response, { error: error.message }, status: 502)
     rescue JSON::ParserError
       json(response, { error: "mxcli returned invalid marketplace JSON" }, status: 502)
@@ -377,11 +445,19 @@ module MendixBridge
 
       payload = JSON.parse(request.body.to_s)
       qn = payload.fetch("qn")
-      content = payload.fetch("content").to_s
       detail = page_detail(qn)
       return json(response, { error: "unknown page" }, status: 404) unless detail
 
-      mdl = build_page_mdl(qn, detail, content)
+      # Two modes: "alter" sends a raw ALTER PAGE statement (in-place edits,
+      # preserving everything else on the page); default regenerates the whole
+      # page from the edited widget tree (CREATE OR MODIFY).
+      if payload["mode"] == "alter"
+        mdl = payload.fetch("mdl").to_s
+        content = payload["content"].to_s
+      else
+        content = payload.fetch("content").to_s
+        mdl = build_page_mdl(qn, detail, content)
+      end
       ok, message = check_mdl(mdl)
       persist_page_draft(qn, content, mdl, ok, message)
       json(
@@ -461,6 +537,13 @@ module MendixBridge
 
       payload = JSON.parse(request.body.to_s)
       id = payload.fetch("id").to_s
+      if id.start_with?("seed-")
+        return json(
+          response,
+          { ok: false, message: "Offline catalog entry — installing requires a Mendix login (mxcli auth login), which also refreshes the catalog with real ids." },
+          status: 403
+        )
+      end
       return json(response, { error: "invalid marketplace id" }, status: 422) unless
         id.match?(/\A\d+\z/)
       unless payload["studio_closed"] == true
@@ -493,7 +576,18 @@ module MendixBridge
     rescue JSON::ParserError
       json(response, { error: "invalid JSON payload" }, status: 400)
     rescue BackendServerError => error
-      json(response, { ok: false, message: error.message }, status: 502)
+      if auth_error?(error.message)
+        return json(
+          response,
+          { ok: false, needs_login: true,
+            message: "Log in to Mendix first (👤 button) to install marketplace modules." },
+          status: 401
+        )
+      end
+      # Trim the mxcli usage/help dump to the first meaningful error line.
+      brief = error.message.to_s.lines.map(&:strip)
+        .find { |l| !l.empty? && !l.start_with?("WARNING:", "Usage:", "hint:") } || error.message
+      json(response, { ok: false, message: "Install failed: #{brief}" }, status: 502)
     end
 
     # Applies a validated page or flow draft to the source .mpr via mxcli exec,
@@ -545,11 +639,264 @@ module MendixBridge
       end
 
       delete_draft(file, qn)
-      refresh_error = refresh_inventory(project)
+      # The inventory refresh describes every element and can take a while —
+      # run it in the background so the Apply button returns right away.
+      refresh_inventory_async(project)
       json(
         response,
-        { ok: true, message: refresh_error || "Draft applied and inventory refreshed." }
+        { ok: true, message: "Draft applied — inventory refresh running in background." }
       )
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # Create a new element (module, page, microflow, nanoflow, entity,
+    # enumeration) in the source .mpr via mxcli exec, Studio Pro-style. An
+    # optional folder path places the document (folders are created by MOVE).
+    IDENTIFIER = /\A[A-Za-z][A-Za-z0-9_]*\z/
+    FOLDER_PATH = %r{\A[A-Za-z0-9_ -]+(/[A-Za-z0-9_ -]+)*\z}
+
+    CREATE_KINDS = {
+      "module"      => nil,
+      "page"        => "PAGE",
+      "microflow"   => "MICROFLOW",
+      "nanoflow"    => "NANOFLOW",
+      "entity"      => "ENTITY",
+      "enumeration" => "ENUMERATION"
+    }.freeze
+
+    def create_element_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      kind = payload.fetch("kind").to_s
+      name = payload.fetch("name").to_s
+      mod = payload["module"].to_s
+      folder = payload["folder"].to_s.strip
+
+      return json(response, { error: "unknown kind: #{kind}" }, status: 422) unless
+        CREATE_KINDS.key?(kind)
+      return json(response, { error: "invalid name" }, status: 422) unless name.match?(IDENTIFIER)
+      if kind != "module"
+        return json(response, { error: "invalid module" }, status: 422) unless mod.match?(IDENTIFIER)
+      end
+      if !folder.empty? && !folder.match?(FOLDER_PATH)
+        return json(response, { error: "invalid folder path" }, status: 422)
+      end
+      unless payload["studio_closed"] == true
+        return json(
+          response,
+          { ok: false, message: "Confirm Studio Pro is closed before creating elements." },
+          status: 403
+        )
+      end
+
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      mdl =
+        case kind
+        when "module"      then "CREATE MODULE #{name};"
+        when "page"        then "CREATE PAGE #{mod}.#{name} (Title: '#{name}', Layout: Atlas_Core.Atlas_Default) {}"
+        when "microflow"   then "CREATE MICROFLOW #{mod}.#{name} ()\nBEGIN\n  return;\nEND;"
+        when "nanoflow"    then "CREATE NANOFLOW #{mod}.#{name} ()\nBEGIN\n  return;\nEND;"
+        when "entity"      then "CREATE ENTITY #{mod}.#{name};"
+        when "enumeration" then "CREATE ENUMERATION #{mod}.#{name} VALUES ('Default');"
+        end
+      if kind != "module" && !folder.empty?
+        mdl += "\nMOVE #{CREATE_KINDS[kind]} #{mod}.#{name} TO FOLDER '#{folder}';"
+      end
+
+      Tempfile.create(["mendix-create-", ".mdl"]) do |file_handle|
+        file_handle.write("#{mdl}\n")
+        file_handle.flush
+        stdout, stderr, status = Open3.capture3(@mxcli, "exec", file_handle.path, "-p", project)
+        unless status.success?
+          detail = (stderr.empty? ? stdout : stderr).strip
+          return json(response, { ok: false, message: "Create failed: #{detail}" }, status: 422)
+        end
+      end
+
+      refresh_inventory_async(project)
+      qn = kind == "module" ? name : "#{mod}.#{name}"
+      json(response, { ok: true, qn: qn, message: "#{kind.capitalize} #{qn} created — inventory refreshing." })
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # Read-only data queries against the project. OQL runs against the running
+    # Mendix app via the M2EE admin API (rollback/preview mode); SQL runs
+    # against the configured database. Neither needs a marketplace login — OQL
+    # is a built-in Mendix query language, not an installable module.
+    def query_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      engine = payload.fetch("engine").to_s
+      query = payload.fetch("query").to_s.strip
+      return json(response, { ok: false, message: "Query is empty." }, status: 422) if query.empty?
+      unless %w[oql sql].include?(engine)
+        return json(response, { error: "unknown engine: #{engine}" }, status: 422)
+      end
+
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      args =
+        if engine == "oql"
+          [@mxcli, "oql", "-p", project, "--json", query]
+        else
+          dsn = sql_dsn
+          unless dsn
+            return json(
+              response,
+              { ok: false, message: "No database connection configured. Set it in Settings (DB host/port/name/user/password)." },
+              status: 422
+            )
+          end
+          [@mxcli, "sql", "-p", project, "--json", "--dsn", dsn, query]
+        end
+
+      stdout, stderr, status = Open3.capture3(*args)
+      unless status.success?
+        detail = clean_mxcli_error(stderr.empty? ? stdout : stderr)
+        hint = engine == "oql" ? " (is the app running? OQL needs the app up)" : ""
+        return json(response, { ok: false, message: "Query failed: #{detail}#{hint}" }, status: 422)
+      end
+
+      rows = parse_query_rows(stdout)
+      json(response, { ok: true, engine: engine, rows: rows, count: rows.length })
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # Build a Postgres DSN from the project's .docker/.env. External DB mode
+    # points at the configured host; local Docker mode reaches the container's
+    # published port on localhost.
+    def sql_dsn
+      path = docker_env_path
+      return nil unless path
+
+      env = parse_env_file(path)
+      name = env["DB_NAME"].to_s
+      user = env["DB_USER"].to_s
+      pass = env["DB_PASSWORD"].to_s
+      return nil if name.empty? || user.empty?
+
+      if env["DB_MODE"].to_s == "external"
+        host = env["EXT_DB_HOST"].to_s
+        port = env.fetch("EXT_DB_PORT", "5432")
+        return nil if host.empty?
+      else
+        host = "localhost"
+        port = env.fetch("DB_PORT", "5432")
+      end
+
+      require "cgi"
+      "postgres://#{CGI.escape(user)}:#{CGI.escape(pass)}@#{host}:#{port}/#{name}?sslmode=disable"
+    end
+
+    def parse_query_rows(stdout)
+      out = stdout.to_s.strip
+      return [] if out.empty?
+
+      data = JSON.parse(out)
+      data.is_a?(Array) ? data : [data]
+    rescue JSON::ParserError
+      # Fall back to raw text so the user still sees the tool's output.
+      [{ "output" => stdout.to_s.strip }]
+    end
+
+    def clean_mxcli_error(text)
+      text.to_s.lines.reject { |l| l.start_with?("WARNING:") }.join.strip
+    end
+
+    # Project consistency check via `mxcli lint`. Powers the Errors tab —
+    # naming, empty microflows, missing access rules, security rules, etc.
+    def errors_route(response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      # A non-zero exit just means violations were found, so ignore the status.
+      stdout, stderr, = Open3.capture3(@mxcli, "lint", "-p", project, "-f", "json")
+      # lint prints a catalog-building progress preamble before the JSON body;
+      # slice from the first brace.
+      brace = stdout.index("{")
+      unless brace
+        detail = clean_mxcli_error(stderr.empty? ? stdout : stderr)
+        return json(response, { ok: false, message: "Lint failed: #{detail}" }, status: 502)
+      end
+
+      data = JSON.parse(stdout[brace..])
+      violations = (data["violations"] || []).map do |v|
+        {
+          ruleId: v["ruleId"],
+          severity: v["severity"] || "warning",
+          message: v["message"],
+          module: v["module"],
+          document: v["document"],
+          documentType: v["documentType"],
+          qn: [v["module"], v["document"]].compact.join("."),
+          suggestion: v["suggestion"]
+        }
+      end
+      json(response, { ok: true, violations: violations, count: violations.length })
+    rescue JSON::ParserError
+      json(response, { ok: false, message: "mxcli lint returned invalid JSON." }, status: 502)
+    end
+
+    # General-purpose MDL execution primitive. Powers live editing from the AI
+    # chat (agents emit MDL; the user validates/applies it) and any other
+    # feature that needs to run arbitrary MDL. `apply: false` only validates
+    # (mxcli check); `apply: true` runs `mxcli exec` and requires Studio Pro
+    # closed, then refreshes the inventory in the background.
+    def mdl_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      mdl = payload.fetch("mdl").to_s
+      return json(response, { ok: false, message: "MDL is empty." }, status: 422) if mdl.strip.empty?
+
+      apply = payload["apply"] == true
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      ok, message = check_mdl(mdl)
+      return json(response, { ok: false, applied: false, message: message }, status: 422) unless ok
+
+      unless apply
+        return json(response, { ok: true, applied: false, message: "MDL is valid." })
+      end
+      unless payload["studio_closed"] == true
+        return json(
+          response,
+          { ok: false, applied: false, needs_studio_closed: true,
+            message: "Confirm Studio Pro is closed to apply changes to the project." },
+          status: 403
+        )
+      end
+
+      Tempfile.create(["mendix-mdl-", ".mdl"]) do |file_handle|
+        file_handle.write(mdl)
+        file_handle.flush
+        stdout, stderr, status = Open3.capture3(@mxcli, "exec", file_handle.path, "-p", project)
+        unless status.success?
+          detail = clean_mxcli_error(stderr.empty? ? stdout : stderr)
+          return json(response, { ok: false, applied: false, message: "Apply failed: #{detail}" }, status: 422)
+        end
+      end
+
+      refresh_inventory_async(project)
+      json(response, { ok: true, applied: true, message: "MDL applied — inventory refreshing in background." })
     rescue KeyError => error
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
     rescue JSON::ParserError
@@ -590,7 +937,10 @@ module MendixBridge
       end
 
       @app_mutex.synchronize do
-        @app_log = ["$ #{cmd.join(' ')}", "Starting…"]
+        # Append (don't reset): log consumers poll by offset, and a reset
+        # would strand them past the end of the new, shorter log.
+        @app_log << "" unless @app_log.empty?
+        @app_log << "$ #{cmd.join(' ')}" << "Starting…"
         @app_type = mode
         @docker_running = false
       end
@@ -679,7 +1029,10 @@ module MendixBridge
       offset = request.query["offset"].to_i.clamp(0, Float::INFINITY)
       pid, docker, log = @app_mutex.synchronize { [@app_pid, @docker_running, @app_log.dup] }
       lines = log.drop(offset)
-      json(response, { lines: lines, offset: offset + lines.length, running: !pid.nil? || docker })
+      json(
+        response,
+        { lines: lines, offset: offset + lines.length, total: log.length, running: !pid.nil? || docker }
+      )
     end
 
     # Returns [mode, cmd_array] where mode is :docker, :direct, or nil
@@ -820,6 +1173,38 @@ module MendixBridge
       "Module installed, but the inventory refresh failed: #{error.message}"
     end
 
+    # Background inventory refresh with a single-flight guard: a second
+    # request while one is running just marks it stale and re-runs once.
+    def refresh_inventory_async(project)
+      @refresh_mutex ||= Mutex.new
+      again = @refresh_mutex.synchronize do
+        if @refreshing
+          @refresh_again = true
+          true
+        else
+          @refreshing = true
+          false
+        end
+      end
+      return if again
+
+      Thread.new do
+        loop do
+          refresh_inventory(project)
+          done = @refresh_mutex.synchronize do
+            if @refresh_again
+              @refresh_again = false
+              false
+            else
+              @refreshing = false
+              true
+            end
+          end
+          break if done
+        end
+      end
+    end
+
     def read_draft(file, qn)
       path = File.join(@inventory_dir, "inventory", file)
       return nil unless File.file?(path)
@@ -897,6 +1282,116 @@ module MendixBridge
 
     def escape_mdl(value)
       value.to_s.gsub("'", "''")
+    end
+
+    # ---- project settings (docker env + db mode) -------------------------
+
+    SETTINGS_KEYS = %w[
+      APP_PORT ADMIN_PORT M2EE_ADMIN_PASS MX_LOG_LEVEL
+      DB_MODE DB_PORT DB_NAME DB_USER DB_PASSWORD
+      EXT_DB_HOST EXT_DB_PORT EXT_DB_SSL
+    ].freeze
+
+    def settings_route(request, response)
+      env_path = docker_env_path
+      case request.request_method
+      when "GET"
+        current = env_path ? parse_env_file(env_path) : {}
+        json(
+          response,
+          {
+            settings: current.slice(*SETTINGS_KEYS),
+            env_path:,
+            editable: !env_path.nil?
+          }
+        )
+      when "PUT"
+        return json(response, { error: "no .docker/.env found" }, status: 503) unless env_path
+        payload = JSON.parse(request.body.to_s)
+        updates = payload.slice(*SETTINGS_KEYS)
+        update_env_file(env_path, updates)
+        apply_db_mode(env_path, updates)
+        json(response, { ok: true, message: "Settings saved. Restart the application for changes to take effect." })
+      else
+        json(response, { error: "method not allowed" }, status: 405)
+      end
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    def docker_env_path
+      project = source_project
+      return nil unless project
+
+      path = File.join(File.dirname(File.expand_path(project)), ".docker", ".env")
+      path if File.file?(path)
+    end
+
+    def parse_env_file(path)
+      File.readlines(path, chomp: true).each_with_object({}) do |line, h|
+        next if line.strip.start_with?("#") || !line.include?("=")
+        key, _, value = line.partition("=")
+        h[key.strip] = value
+      end
+    end
+
+    def update_env_file(path, updates)
+      lines = File.readlines(path)
+      updates.each do |key, value|
+        found = false
+        lines.map! do |line|
+          if line =~ /\A#{Regexp.escape(key)}=/
+            found = true
+            "#{key}=#{value}\n"
+          else
+            line
+          end
+        end
+        lines << "#{key}=#{value}\n" unless found
+      end
+      File.write(path, lines.join)
+    end
+
+    # When DB_MODE=external, write a docker-compose.override.yml that:
+    #   - Points the mendix service at the external DB host
+    #   - Replaces the db service with a no-op container so depends_on succeeds instantly
+    # When DB_MODE=local (or absent), remove any override file we created.
+    def apply_db_mode(env_path, updates)
+      mode = updates.fetch("DB_MODE", "local")
+      docker_dir = File.dirname(env_path)
+      override_path = File.join(docker_dir, "docker-compose.override.yml")
+
+      if mode == "external"
+        ext_host = updates.fetch("EXT_DB_HOST", "").strip
+        ext_port = updates.fetch("EXT_DB_PORT", "5432").strip
+        ssl = updates.fetch("EXT_DB_SSL", "false") == "true"
+
+        db_type = ssl ? "POSTGRESQL_SSL" : "POSTGRESQL"
+        db_host = "#{ext_host}:#{ext_port}"
+
+        override_content = <<~YAML
+          # Generated by Mendix Ruby Bridge — external database mode
+          # Remove this file to revert to the local Docker PostgreSQL container
+          services:
+            mendix:
+              environment:
+                - RUNTIME_PARAMS_DATABASETYPE=#{db_type}
+                - RUNTIME_PARAMS_DATABASEHOST=#{db_host}
+            db:
+              image: alpine
+              command: ["echo", "External DB mode — local PostgreSQL container skipped"]
+              healthcheck:
+                test: ["CMD", "true"]
+                interval: 1s
+                timeout: 1s
+                retries: 1
+        YAML
+        File.write(override_path, override_content)
+      elsif File.file?(override_path)
+        # Check that it's one we generated before removing
+        content = File.read(override_path)
+        File.delete(override_path) if content.include?("Generated by Mendix Ruby Bridge")
+      end
     end
 
     def json(response, payload, status: 200)

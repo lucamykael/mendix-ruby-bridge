@@ -1,0 +1,71 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Refresh the offline marketplace catalog served by the Bridge backend when
+# mxcli has no authenticated session.
+#
+# Requires a logged-in mxcli (`mxcli auth login`). Runs a sweep of broad
+# queries, merges the results by content id, and writes the catalog JSON.
+#
+# Usage:
+#   bin/refresh-marketplace-catalog [--mxcli PATH] [--out PATH]
+#
+# Defaults: mxcli from ./mxcli, .tools/mxcli, or PATH; output to
+# data/marketplace_catalog.json (the bundled seed location).
+
+require "json"
+require "open3"
+require "time"
+
+root = File.expand_path("..", __dir__)
+mxcli = nil
+out = File.join(root, "data", "marketplace_catalog.json")
+
+ARGV.each_cons(2) do |flag, value|
+  mxcli = value if flag == "--mxcli"
+  out = value if flag == "--out"
+end
+
+mxcli ||= [File.join(root, "mxcli"), File.join(root, ".tools", "mxcli")]
+  .find { |p| File.executable?(p) } || "mxcli"
+
+# Broad sweep: empty query plus category-ish terms so paginated/limited search
+# backends still yield wide coverage.
+QUERIES = [
+  "", "widget", "connector", "module", "theme", "chart", "grid", "import",
+  "export", "sso", "auth", "email", "pdf", "excel", "rest", "database",
+  "workflow", "mobile", "map", "calendar", "commons"
+].freeze
+
+items = {}
+failures = 0
+
+QUERIES.each do |query|
+  stdout, stderr, status = Open3.capture3(
+    mxcli, "marketplace", "search", query, "--limit", "100", "--refresh", "--json"
+  )
+  unless status.success?
+    failures += 1
+    warn "search #{query.inspect} failed: #{stderr.lines.grep_v(/^WARNING/).join.strip}"
+    next
+  end
+  data = JSON.parse(stdout)
+  list = data.is_a?(Array) ? data : data.fetch("items", data.fetch("results", []))
+  list.each do |item|
+    id = (item["id"] || item["contentId"] || item["content_id"]).to_s
+    items[id] = item unless id.empty?
+  end
+rescue JSON::ParserError
+  failures += 1
+  warn "search #{query.inspect}: invalid JSON from mxcli"
+end
+
+if items.empty?
+  abort "No items fetched (#{failures} failed queries). Are you logged in? Run: #{mxcli} auth login"
+end
+
+File.write(out, JSON.pretty_generate({
+  "generated" => Time.now.utc.iso8601,
+  "items" => items.values
+}))
+puts "Wrote #{items.size} items to #{out} (#{failures} failed queries)."

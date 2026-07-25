@@ -8,7 +8,7 @@ const ICONS: Record<string, string> = {
   navigation: "◮", settings: "⚙", javascriptaction: "𝒋", javaaction: "𝒋",
   buildingblock: "▩", pagetemplate: "▤", imagecollection: "◲", constant: "π",
 };
-const icon = (t: string) => ICONS[t] ?? "·";
+const icon = (t: string) => ICONS[t] ?? "";
 
 export interface Selection {
   qn: string;
@@ -71,7 +71,7 @@ function TreeItem({
   onOpenDomainModel?: (moduleName: string) => void;
 }) {
   const kids = node.children ?? [];
-  const [open, setOpen] = useState(node.type !== "module" && node.type !== "folder");
+  const [open, setOpen] = useState(false);
   const forceOpen = (p.q || p.pagesOnly) && kids.length > 0;
   const detail = node.qualifiedName ? p.hasDetail(node.qualifiedName) : false;
   const isSel = node.qualifiedName && node.qualifiedName === p.selected;
@@ -117,9 +117,9 @@ function TreeItem({
             {open || forceOpen ? "−" : "+"}
           </span>
         ) : (
-          <span className="twist dot">○</span>
+          <span className="twist" />
         )}
-        <span className={`t-ico t-${node.type}`}>{icon(node.type)}</span>
+        {icon(node.type) && <span className={`t-ico t-${node.type}`}>{icon(node.type)}</span>}
         <span className="label">{node.label || node.qualifiedName}</span>
         {entityDetail && <EntityBadge persistable={entityDetail.persistable} />}
         {kids.length > 0 && <span className="count">{kids.length}</span>}

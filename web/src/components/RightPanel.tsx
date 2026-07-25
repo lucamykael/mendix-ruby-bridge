@@ -1,9 +1,11 @@
-import { useState } from "react";
-import Toolbox from "./Toolbox";
+import { useEffect, useState } from "react";
+import Toolbox, { type FlowAction } from "./Toolbox";
 import MarketplacePanel from "./MarketplacePanel";
 import AIChat from "./AIChat";
+import WidgetProps from "./WidgetProps";
 import type { Selection } from "./Tree";
 import type { ElementDetail } from "../model/types";
+import type { EditableNode } from "./PageBuilder";
 
 type RightTab = "toolbox" | "marketplace" | "properties" | "chat";
 
@@ -128,12 +130,29 @@ export default function RightPanel({
   context,
   selection,
   detail,
+  widgetNode,
+  onWidgetChange,
+  flowActions,
+  onLogin,
+  loggedIn,
+  aiContext,
 }: {
   context?: string;
   selection?: Selection;
   detail?: ElementDetail;
+  widgetNode?: EditableNode;
+  onWidgetChange?: (props: string) => void;
+  flowActions?: FlowAction[];
+  onLogin?: () => void;
+  loggedIn?: boolean;
+  aiContext?: string;
 }) {
   const [tab, setTab] = useState<RightTab>("toolbox");
+
+  // Auto-switch to Properties when a widget is selected in the page builder
+  useEffect(() => {
+    if (widgetNode) setTab("properties");
+  }, [widgetNode?.id]);
 
   return (
     <div className="right-panel">
@@ -150,10 +169,14 @@ export default function RightPanel({
         ))}
       </div>
       <div className="rp-body">
-        {tab === "toolbox" && <Toolbox context={context} />}
-        {tab === "marketplace" && <MarketplacePanel />}
-        {tab === "properties" && <PropertiesPanel selection={selection} detail={detail} />}
-        {tab === "chat" && <AIChat />}
+        {tab === "toolbox" && <Toolbox context={context} actions={flowActions} />}
+        {tab === "marketplace" && <MarketplacePanel onLogin={onLogin} loggedIn={loggedIn} />}
+        {tab === "properties" && (
+          widgetNode
+            ? <WidgetProps node={widgetNode} onChange={onWidgetChange ?? (() => {})} onEditingChange={() => {}} />
+            : <PropertiesPanel selection={selection} detail={detail} />
+        )}
+        {tab === "chat" && <AIChat context={aiContext} />}
       </div>
     </div>
   );

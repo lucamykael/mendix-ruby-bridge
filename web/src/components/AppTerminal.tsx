@@ -5,6 +5,7 @@ export type TerminalMode = "hidden" | "docked" | "floating" | "minimized";
 interface LogResponse {
   lines: string[];
   offset: number;
+  total?: number;
   running: boolean;
 }
 
@@ -31,9 +32,8 @@ interface Props {
 
 export default function AppTerminal({ mode, onModeChange, running, onRunningChange }: Props) {
   const [lines, setLines] = useState<string[]>([]);
-  const [offset, setOffset] = useState(0);
+  const offsetRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const pollingRef = useRef(false);
 
   // Float position
   const [floatPos, setFloatPos] = useState({ x: 80, y: 80 });
@@ -44,46 +44,44 @@ export default function AppTerminal({ mode, onModeChange, running, onRunningChan
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [lines]);
 
-  // Poll log while terminal is visible and running (or just started)
+  // Poll the log for as long as the terminal is visible. Keyed on `mode` only:
+  // restarting the loop on every `running` flip is what used to race the old
+  // loop's wind-down and leave the console frozen with no active poller.
+  // While the app runs we poll fast; when it's idle we keep a slow heartbeat
+  // so a later Run/Re-Run picks up immediately.
   useEffect(() => {
     if (mode === "hidden" || mode === "minimized") return;
-    if (pollingRef.current) return;
-
-    pollingRef.current = true;
-    let currentOffset = offset;
     let active = true;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
     const poll = async () => {
-      let idleTicks = 0;
       while (active) {
         try {
-          const data = await fetchLog(currentOffset);
+          const data = await fetchLog(offsetRef.current);
+          if (!active) break;
+          // Backend log shrank (restarted backend or reset log): resync
+          // from the top instead of polling past its end forever.
+          if (data.total !== undefined && data.total < offsetRef.current) {
+            offsetRef.current = 0;
+            setLines([]);
+            continue;
+          }
           if (data.lines.length > 0) {
             setLines((prev) => [...prev, ...data.lines]);
-            currentOffset = data.offset;
-            setOffset(data.offset);
-            idleTicks = 0;
-          } else {
-            idleTicks++;
+            offsetRef.current = data.offset;
           }
           onRunningChange(data.running);
-          // Stop polling only when truly stopped and no new lines for a while
-          if (!data.running && idleTicks > 5) {
-            active = false;
-          } else {
-            await new Promise((r) => setTimeout(r, 400));
-          }
+          await sleep(data.running || data.lines.length > 0 ? 400 : 1500);
         } catch {
-          await new Promise((r) => setTimeout(r, 1000));
+          await sleep(2000);
         }
       }
-      pollingRef.current = false;
     };
 
     void poll();
     return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, running]);
+  }, [mode]);
 
   // Drag handlers for floating mode
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -141,7 +139,7 @@ export default function AppTerminal({ mode, onModeChange, running, onRunningChan
         <button
           className="term-btn term-btn-close"
           title="Close terminal"
-          onClick={() => { onModeChange("hidden"); setLines([]); setOffset(0); }}
+          onClick={() => { onModeChange("hidden"); setLines([]); offsetRef.current = 0; }}
         >
           ✕
         </button>

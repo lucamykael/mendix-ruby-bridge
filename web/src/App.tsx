@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Tree, { type Selection } from "./components/Tree";
 import Canvas from "./components/Canvas";
 import Detail from "./components/Detail";
@@ -6,8 +6,13 @@ import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
 import Drafts from "./components/Drafts";
 import RightPanel from "./components/RightPanel";
+import type { EditableNode } from "./components/PageBuilder";
 import AppTerminal, { type TerminalMode } from "./components/AppTerminal";
 import LoginModal from "./components/LoginModal";
+import SettingsModal from "./components/SettingsModal";
+import NewElementModal from "./components/NewElementModal";
+import QueryPanel from "./components/QueryPanel";
+import type { FlowAction } from "./components/Toolbox";
 import { loadHealth, loadInventory } from "./model/data";
 import { git, type GitStatus } from "./model/api";
 import { collectAssocs } from "./model/er";
@@ -16,7 +21,7 @@ import "./themes.css";
 import "./App.css";
 
 type View = "explorer" | "git" | "er" | "drafts";
-type BottomTab = "details" | "changes" | "errors" | "console" | "find" | "variables" | "debugger" | "breakpoints";
+type BottomTab = "details" | "changes" | "errors" | "console" | "oql" | "find" | "variables" | "debugger" | "breakpoints";
 
 function ChangesPane() {
   const [status, setStatus] = useState<GitStatus>();
@@ -41,6 +46,69 @@ function ChangesPane() {
   );
 }
 
+interface Violation {
+  ruleId?: string; severity?: string; message?: string;
+  module?: string; document?: string; documentType?: string; qn?: string; suggestion?: string;
+}
+
+function ErrorsPane({ onOpen }: { onOpen?: (qn: string) => void }) {
+  const [violations, setViolations] = useState<Violation[]>();
+  const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
+
+  const run = useCallback(async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const r = await fetch("/api/errors");
+      const body = (await r.json()) as { ok?: boolean; violations?: Violation[]; message?: string; error?: string };
+      if (r.ok && body.ok) setViolations(body.violations ?? []);
+      else setError(body.message ?? body.error ?? `HTTP ${r.status}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void run(); }, [run]);
+
+  return (
+    <div className="detail-drawer console-pane errors-pane">
+      <div className="errors-head">
+        <span>Project consistency check <span className="muted">(mxcli lint)</span></span>
+        <button className="editor-secondary" onClick={() => void run()} disabled={loading}>
+          {loading ? "Checking…" : "↻ Re-check"}
+        </button>
+      </div>
+      {error && <p className="pb-err">{error}</p>}
+      {violations && violations.length === 0 && !error && (
+        <p className="pb-ok">No consistency issues found. ✓</p>
+      )}
+      {violations && violations.length > 0 && (
+        <div className="errors-list">
+          {violations.map((v, i) => (
+            <div
+              key={i}
+              className={`error-row sev-${v.severity ?? "warning"}` + (v.qn ? " clickable" : "")}
+              onClick={() => v.qn && onOpen?.(v.qn)}
+              title={v.qn ? `Open ${v.qn}` : undefined}
+            >
+              <span className={`error-sev sev-${v.severity ?? "warning"}`}>{v.severity ?? "warning"}</span>
+              <span className="error-rule">{v.ruleId}</span>
+              <span className="error-msg">
+                {v.message}
+                {v.qn && <span className="error-qn"> · {v.qn}</span>}
+                {v.suggestion && <span className="error-fix"> — {v.suggestion}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const DEFAULT_THEME = "ruby";
 const THEMES = [
   { id: "ruby", label: "Ruby" },
@@ -50,6 +118,11 @@ const THEMES = [
   { id: "gruvbox", label: "Gruvbox" },
   { id: "catppuccin", label: "Catppuccin" },
 ];
+const LIGHT_SUFFIX = "-light";
+function isDark(theme: string) { return !theme.endsWith(LIGHT_SUFFIX); }
+function toggleThemeMode(theme: string) {
+  return isDark(theme) ? theme + LIGHT_SUFFIX : theme.replace(LIGHT_SUFFIX, "");
+}
 
 function orderModules(tree: TreeNode[]): TreeNode[] {
   const rest = tree.filter((n) => !(n.type === "module" && n.label === "System"));
@@ -83,6 +156,23 @@ export default function App() {
   const [error, setError] = useState<string>();
   const [health, setHealth] = useState<BackendHealth>();
   const [sel, setSel] = useState<Selection>();
+  // Studio Pro-style document tabs: every opened element stays in a tab
+  // until it's explicitly closed; selecting activates or appends its tab.
+  const [openTabs, setOpenTabs] = useState<Selection[]>([]);
+  const openDoc = useCallback((s: Selection) => {
+    setSel(s);
+    setOpenTabs((tabs) =>
+      tabs.some((t) => t.qn === s.qn)
+        ? tabs.map((t) => (t.qn === s.qn ? s : t))
+        : [...tabs, s],
+    );
+  }, []);
+  const closeDoc = (qn: string) => {
+    const idx = openTabs.findIndex((t) => t.qn === qn);
+    const next = openTabs.filter((t) => t.qn !== qn);
+    setOpenTabs(next);
+    if (sel?.qn === qn) setSel(next[Math.min(Math.max(idx, 0), next.length - 1)]);
+  };
   const [view, setView] = useState<View>("explorer");
   const [bottomTab, setBottomTab] = useState<BottomTab>();
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? DEFAULT_THEME);
@@ -90,9 +180,23 @@ export default function App() {
   const [draftQns, setDraftQns] = useState<DraftStatus>(new Map());
   const [terminalMode, setTerminalMode] = useState<TerminalMode>("hidden");
   const [appRunning, setAppRunning] = useState(false);
+  const [appBusy, setAppBusy] = useState(false);
+  const [pageWidget, setPageWidget] = useState<EditableNode | undefined>();
+  const pageWidgetChangeFn = useRef<((p: string) => void) | undefined>(undefined);
+  const handleWidgetSelect = useCallback(
+    (node: EditableNode | undefined, changeFn: ((p: string) => void) | undefined) => {
+      setPageWidget(node);
+      pageWidgetChangeFn.current = changeFn;
+    },
+    [],
+  );
+  const handleWidgetChange = useCallback((props: string) => pageWidgetChangeFn.current?.(props), []);
   const [showLogin, setShowLogin] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [newElementKind, setNewElementKind] = useState<string>();
   const [loggedIn, setLoggedIn] = useState(false);
   const [authUser, setAuthUser] = useState<string | null>(null);
+  const [appPort, setAppPort] = useState(8080);
 
   useEffect(() => {
     loadInventory().then(setInv).catch((e) => setError(String(e)));
@@ -102,7 +206,26 @@ export default function App() {
       if (h.auth?.logged_in) { setLoggedIn(true); setAuthUser(h.auth.username ?? null); }
     }).catch(() => setHealth(undefined));
     loadDraftStatus().then(setDraftQns).catch(() => null);
+    fetch("/api/settings")
+      .then((r) => r.json() as Promise<{ settings?: { APP_PORT?: string } }>)
+      .then((d) => { const p = parseInt(d.settings?.APP_PORT ?? ""); if (p > 0) setAppPort(p); })
+      .catch(() => null);
   }, []);
+
+  // Keep appRunning truthful even when the console isn't visible (the
+  // terminal's log poller is the primary source, but it only runs while
+  // docked/floating). Poll the status endpoint while we believe the app is up.
+  useEffect(() => {
+    if (!appRunning) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch("/api/app/status");
+        const s = (await r.json()) as { running?: boolean };
+        if (!s.running) setAppRunning(false);
+      } catch { /* backend unreachable — keep current state */ }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [appRunning]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -111,6 +234,94 @@ export default function App() {
 
   const assocs = useMemo(() => (inv ? collectAssocs(inv.details) : []), [inv]);
   const tree = useMemo(() => (inv ? orderModules(inv.tree) : []), [inv]);
+  const moduleNames = useMemo(
+    () => tree.filter((n) => n.type === "module").map((n) => n.label),
+    [tree],
+  );
+
+  // Callable actions (Java/JS actions + micro/nanoflows) from the inventory,
+  // surfaced as draggable flow blocks. Installed modules (e.g. OQL) appear here.
+  const flowActions = useMemo<FlowAction[]>(() => {
+    if (!inv) return [];
+    const acts: FlowAction[] = [];
+    const kinds = new Set(["javaaction", "javascriptaction", "microflow", "nanoflow"]);
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (kinds.has(n.type) && n.qualifiedName) {
+          acts.push({
+            qn: n.qualifiedName,
+            label: n.label || n.qualifiedName.split(".").pop() || n.qualifiedName,
+            module: n.qualifiedName.split(".")[0],
+            kind: n.type as FlowAction["kind"],
+          });
+        }
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(inv.tree);
+    return acts;
+  }, [inv]);
+
+  // Persistable entity qualified names — used by the OQL↔SQL converter to map
+  // Module.Entity references to/from their database table names.
+  const entityQns = useMemo<string[]>(() => {
+    if (!inv) return [];
+    const qns: string[] = [];
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (n.type === "entity" && n.qualifiedName) qns.push(n.qualifiedName);
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(inv.tree);
+    return qns;
+  }, [inv]);
+
+  // Compact project summary handed to the AI chat so it can reason about (and
+  // modify) the actual project — modules, entities, pages, microflows.
+  const aiContext = useMemo<string>(() => {
+    if (!inv) return "";
+    const by: Record<string, string[]> = {};
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (n.qualifiedName && ["entity", "page", "microflow", "nanoflow", "enumeration"].includes(n.type)) {
+          (by[n.type] ??= []).push(n.qualifiedName);
+        }
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(inv.tree);
+    const line = (label: string, key: string) =>
+      by[key]?.length ? `${label} (${by[key].length}): ${by[key].slice(0, 40).join(", ")}${by[key].length > 40 ? ", …" : ""}` : "";
+    return [
+      `Modules: ${moduleNames.join(", ")}`,
+      line("Entities", "entity"),
+      line("Pages", "page"),
+      line("Microflows", "microflow"),
+      line("Nanoflows", "nanoflow"),
+      line("Enumerations", "enumeration"),
+    ].filter(Boolean).join("\n");
+  }, [inv, moduleNames]);
+
+  // Studio Pro-style creation shortcuts (Alt-based — browsers reserve
+  // Ctrl+N/T/W and pages cannot intercept them). Ignored while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName ?? "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+      const kinds: Record<string, string> = {
+        n: "page", p: "page", m: "module", l: "microflow", e: "entity",
+      };
+      const kind = kinds[e.key.toLowerCase()];
+      if (!kind) return;
+      e.preventDefault();
+      setNewElementKind(kind);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const selectByQn = (qn: string) => {
     if (!inv) return;
@@ -122,7 +333,7 @@ export default function App() {
       }
     };
     walk(inv.tree);
-    setSel(found ?? { qn, type: inv.details[qn]?.kind ?? "element", label: qn.split(".").pop() ?? qn });
+    openDoc(found ?? { qn, type: inv.details[qn]?.kind ?? "element", label: qn.split(".").pop() ?? qn });
   };
 
   const openDomainModel = (moduleName: string) => {
@@ -157,6 +368,7 @@ export default function App() {
     { id: "changes", label: "Changes" },
     { id: "errors", label: "Errors" },
     { id: "console", label: "Console" },
+    { id: "oql", label: "OQL / SQL" },
     { id: "find", label: "Find Results" },
     { id: "variables", label: "Variables", stub: true },
     { id: "debugger", label: "Debugger", stub: true },
@@ -185,30 +397,52 @@ export default function App() {
 
         <div className="header-actions">
           <button
+            className="hdr-btn"
+            title="Add new element — Alt+N page · Alt+M module · Alt+L microflow · Alt+E entity"
+            onClick={() => setNewElementKind("page")}
+          >
+            ＋ New
+          </button>
+          <button
             className="hdr-btn hdr-run"
-            title={health?.capabilities?.app_run ? "Run application" : "Configure MRB_RUN_CMD to enable"}
-            disabled={appRunning || !health?.capabilities?.app_run}
+            title={health?.capabilities?.app_run ? (appRunning ? "Restart application" : "Run application") : "Configure MRB_RUN_CMD to enable"}
+            disabled={!health?.capabilities?.app_run || appBusy}
             onClick={async () => {
-              const r = await fetch("/api/app/run", { method: "POST" });
-              const body = (await r.json()) as { ok?: boolean; message?: string };
-              if (r.ok || r.status === 409) {
-                setAppRunning(true);
+              setAppBusy(true);
+              try {
+                if (appRunning) {
+                  await fetch("/api/app/stop", { method: "POST" });
+                  setTerminalMode("docked");
+                  // Docker teardown is async on the backend — wait until the
+                  // status endpoint reports the app actually stopped.
+                  for (let i = 0; i < 60; i++) {
+                    await new Promise((r) => setTimeout(r, 2000));
+                    try {
+                      const s = await fetch("/api/app/status");
+                      const st = (await s.json()) as { running?: boolean };
+                      if (!st.running) break;
+                    } catch { break; }
+                  }
+                }
+                const r = await fetch("/api/app/run", { method: "POST" });
                 setTerminalMode("docked");
-              } else {
-                setTerminalMode("docked");
-                setAppRunning(false);
+                setAppRunning(r.ok || r.status === 409);
+              } finally {
+                setAppBusy(false);
               }
-              void body;
             }}
           >
-            ▶ Run
+            {appBusy ? "⟳ …" : appRunning ? "↺ Re-Run" : "▶ Run"}
           </button>
           <button
             className="hdr-btn hdr-stop"
             title="Stop application"
-            disabled={!appRunning}
+            disabled={!appRunning || appBusy}
             onClick={async () => {
               await fetch("/api/app/stop", { method: "POST" });
+              // Show the teardown in the console; the pollers flip the
+              // buttons back once the backend reports the app stopped.
+              setTerminalMode("docked");
             }}
           >
             ■ Stop
@@ -217,7 +451,7 @@ export default function App() {
             className="hdr-btn hdr-view"
             title={appRunning ? "View running application" : "Application is not running"}
             disabled={!appRunning}
-            onClick={() => window.open("http://localhost:8080", "_blank")}
+            onClick={() => window.open(`http://localhost:${appPort}`, "_blank")}
           >
             ⊞ View
           </button>
@@ -237,15 +471,32 @@ export default function App() {
           >
             👤{loggedIn && <span className="hdr-login-user">{authUser?.split("@")[0]}</span>}
           </button>
+          <button
+            className="hdr-btn hdr-settings"
+            title="Project settings"
+            onClick={() => setShowSettings(true)}
+          >
+            ⚙
+          </button>
         </div>
 
         <label className="theme-pick">
           Theme
-          <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+          <select
+            value={isDark(theme) ? theme : theme.replace(LIGHT_SUFFIX, "")}
+            onChange={(e) => setTheme(isDark(theme) ? e.target.value : e.target.value + LIGHT_SUFFIX)}
+          >
             {THEMES.map((t) => (
               <option key={t.id} value={t.id}>{t.label}</option>
             ))}
           </select>
+          <button
+            className="theme-mode-btn"
+            title={isDark(theme) ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={() => setTheme(toggleThemeMode(theme))}
+          >
+            {isDark(theme) ? "☀" : "☾"}
+          </button>
         </label>
       </header>
 
@@ -277,7 +528,7 @@ export default function App() {
               tree={tree}
               hasDetail={(qn) => !!inv.details[qn]}
               selected={sel?.qn}
-              onSelect={setSel}
+              onSelect={openDoc}
               details={inv.details}
               draftQns={draftQns}
               onOpenDomainModel={openDomainModel}
@@ -289,19 +540,29 @@ export default function App() {
             {sel && detail && (
               <>
                 <div className="doc-tabs">
-                  <div className="doc-tab on">
-                    <span className="doc-tab-label">
-                      {sel.label} <span className="doc-tab-module">[{sel.qn.split(".")[0]}]</span>
-                    </span>
-                    <button className="doc-tab-close" title="Close" onClick={() => setSel(undefined)}>×</button>
-                  </div>
+                  {openTabs.map((t) => (
+                    <div
+                      key={t.qn}
+                      className={"doc-tab" + (t.qn === sel.qn ? " on" : "")}
+                      onClick={() => setSel(t)}
+                    >
+                      <span className="doc-tab-label">
+                        {t.label} <span className="doc-tab-module">[{t.qn.split(".")[0]}]</span>
+                      </span>
+                      <button
+                        className="doc-tab-close"
+                        title="Close"
+                        onClick={(e) => { e.stopPropagation(); closeDoc(t.qn); }}
+                      >×</button>
+                    </div>
+                  ))}
                 </div>
                 <div className="editor-bar">
                   <span className="editor-kind">{sel.type}</span>
                   <span className="editor-qn">{sel.qn}</span>
                 </div>
                 <div className="editor-body">
-                  <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
+                  <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} onWidgetSelect={handleWidgetSelect} />
                 </div>
                 {bottomTab === "details" && (
                   <div className="detail-drawer">
@@ -315,11 +576,8 @@ export default function App() {
                   </div>
                 )}
                 {bottomTab === "changes" && <ChangesPane />}
-                {bottomTab === "errors" && (
-                  <div className="detail-drawer console-pane">
-                    <p className="muted">No consistency errors reported. Run `mx check` via the guarded workflow for a full report.</p>
-                  </div>
-                )}
+                {bottomTab === "oql" && <QueryPanel entities={entityQns} />}
+                {bottomTab === "errors" && <ErrorsPane onOpen={selectByQn} />}
                 {bottomTab === "find" && (
                   <div className="detail-drawer console-pane">
                     <p className="muted">No active search. Use filter in App Explorer to find elements.</p>
@@ -362,6 +620,12 @@ export default function App() {
             context={sel?.type}
             selection={sel}
             detail={detail}
+            widgetNode={pageWidget}
+            onWidgetChange={handleWidgetChange}
+            flowActions={flowActions}
+            onLogin={() => setShowLogin(true)}
+            loggedIn={loggedIn}
+            aiContext={aiContext}
           />
         </div>
       )}
@@ -377,6 +641,21 @@ export default function App() {
         <LoginModal
           onClose={() => setShowLogin(false)}
           onAuthChange={(s) => { setLoggedIn(s.logged_in); setAuthUser(s.username); }}
+        />
+      )}
+
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {newElementKind && (
+        <NewElementModal
+          initialKind={newElementKind}
+          modules={moduleNames}
+          onClose={() => setNewElementKind(undefined)}
+          onCreated={() => {
+            setNewElementKind(undefined);
+            // The backend refreshes the inventory in the background —
+            // re-fetch after it has had time to describe the new element.
+            setTimeout(() => { loadInventory().then(setInv).catch(() => null); }, 6000);
+          }}
         />
       )}
 

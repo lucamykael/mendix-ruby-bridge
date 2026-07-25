@@ -6,28 +6,80 @@ import { useMemo, useState } from "react";
 // - entity/domain model -> domain palette
 // Styled after Studio Pro: search on top, collapsible groups, pictogram cards.
 
-type Item = { icon: string; label: string };
+type Item = { icon: string; label: string; flowType?: string; flowKind?: string; flowStmt?: string };
 type Group = { title: string; items: Item[] };
+
+// Callable actions discovered from the project inventory (Java/JavaScript
+// actions and micro/nanoflows). Installed marketplace modules — e.g. an OQL
+// module exposing "Execute OQL", "OQL Variable" — surface here automatically.
+export type FlowAction = {
+  qn: string;
+  label: string;
+  module: string;
+  kind: "javaaction" | "javascriptaction" | "microflow" | "nanoflow";
+};
+
+const ACTION_ICON: Record<FlowAction["kind"], string> = {
+  javaaction: "☕", javascriptaction: "𝒋", microflow: "⚙", nanoflow: "⚡",
+};
+
+// Which callable kinds belong in each flow editor, Studio Pro-style.
+const ACTIONS_FOR: Record<string, FlowAction["kind"][]> = {
+  microflow: ["javaaction", "microflow"],
+  nanoflow: ["javascriptaction", "nanoflow", "microflow"],
+};
+
+// MDL CALL statement for a callable action, so a dragged block serializes as a
+// real "call" activity (not a placeholder). Params are left empty for the user.
+const CALL_MDL: Record<FlowAction["kind"], (qn: string) => string> = {
+  javaaction: (qn) => `CALL JAVA ACTION ${qn} ()`,
+  javascriptaction: (qn) => `CALL JAVASCRIPT ACTION ${qn} ()`,
+  microflow: (qn) => `CALL MICROFLOW ${qn} ()`,
+  nanoflow: (qn) => `CALL NANOFLOW ${qn} ()`,
+};
+
+// Group inventory actions by module into collapsible toolbox groups.
+function actionGroups(context: string | undefined, actions: FlowAction[]): Group[] {
+  const kinds = ACTIONS_FOR[context ?? ""];
+  if (!kinds) return [];
+  const relevant = actions.filter((a) => kinds.includes(a.kind));
+  const byModule = new Map<string, Item[]>();
+  for (const a of relevant) {
+    const items = byModule.get(a.module) ?? [];
+    items.push({
+      icon: ACTION_ICON[a.kind],
+      label: a.label,
+      flowType: "activity",
+      flowKind: "action",
+      flowStmt: CALL_MDL[a.kind](a.qn),
+    });
+    byModule.set(a.module, items);
+  }
+  return [...byModule.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([mod, items]) => ({ title: mod, items: items.sort((x, y) => x.label.localeCompare(y.label)) }));
+}
+
+const act = (icon: string, label: string, kind = "action"): Item => ({ icon, label, flowType: "activity", flowKind: kind });
 
 const FLOW_GROUPS: Group[] = [
   { title: "Object activities", items: [
-    { icon: "⬇", label: "Cast object" }, { icon: "✎", label: "Change object" },
-    { icon: "✔", label: "Commit object(s)" }, { icon: "＋", label: "Create object" },
-    { icon: "🗑", label: "Delete object(s)" }, { icon: "⤵", label: "Retrieve" },
-    { icon: "↺", label: "Rollback object" },
+    act("⬇", "Cast object", "assign"), act("✎", "Change object", "assign"),
+    act("✔", "Commit object(s)"), act("＋", "Create object"),
+    act("🗑", "Delete object(s)"), act("⤵", "Retrieve"), act("↺", "Rollback object"),
   ] },
   { title: "List activities", items: [
-    { icon: "Σ", label: "Aggregate list" }, { icon: "⇄", label: "Change list" },
-    { icon: "＋", label: "Create list" }, { icon: "≣", label: "List operation" },
+    act("Σ", "Aggregate list"), act("⇄", "Change list"),
+    act("＋", "Create list"), act("≣", "List operation"),
   ] },
   { title: "Action call activities", items: [
-    { icon: "☕", label: "Java action call" }, { icon: "⚙", label: "Microflow call" },
+    act("☕", "Java action call"), act("⚙", "Microflow call"),
   ] },
   { title: "Variable activities", items: [
-    { icon: "✎", label: "Change variable" }, { icon: "＋", label: "Create variable" },
+    act("✎", "Change variable", "assign"), act("＋", "Create variable"),
   ] },
   { title: "Client activities", items: [
-    { icon: "▤", label: "Show page" }, { icon: "⚑", label: "Show message" }, { icon: "↧", label: "Download file" },
+    act("▤", "Show page"), act("⚑", "Show message"), act("↧", "Download file"),
   ] },
 ];
 
@@ -77,20 +129,21 @@ function groupsFor(context: string | undefined, tab: string): Group[] {
   }
 }
 
-export default function Toolbox({ context }: { context?: string }) {
+export default function Toolbox({ context, actions = [] }: { context?: string; actions?: FlowAction[] }) {
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"widgets" | "blocks">("widgets");
   const [closed, setClosed] = useState<Set<string>>(new Set());
 
   const isPage = !context || ["page", "snippet", "layout", "pagetemplate"].includes(context);
   const groups = useMemo(() => {
-    const base = groupsFor(context, tab);
+    // Standard activities, then a group per module of installed actions.
+    const base = [...groupsFor(context, tab), ...actionGroups(context, actions)];
     const q = query.trim().toLowerCase();
     if (!q) return base;
     return base
       .map((g) => ({ ...g, items: g.items.filter((it) => it.label.toLowerCase().includes(q)) }))
       .filter((g) => g.items.length);
-  }, [context, tab, query]);
+  }, [context, tab, query, actions]);
 
   const toggle = (title: string) =>
     setClosed((prev) => {
@@ -133,7 +186,15 @@ export default function Toolbox({ context }: { context?: string }) {
                     title={`Drag onto the canvas to add ${it.label}`}
                     draggable
                     onDragStart={(e) => {
-                      e.dataTransfer.setData("application/mrb-item", JSON.stringify(it));
+                      const isFlow = context === "microflow" || context === "nanoflow";
+                      if (isFlow && it.flowType) {
+                        e.dataTransfer.setData(
+                          "application/flow-node",
+                          JSON.stringify({ type: it.flowType, kind: it.flowKind ?? "action", label: it.label, stmt: it.flowStmt }),
+                        );
+                      } else {
+                        e.dataTransfer.setData("application/mrb-item", JSON.stringify(it));
+                      }
                       e.dataTransfer.effectAllowed = "copy";
                     }}
                   >

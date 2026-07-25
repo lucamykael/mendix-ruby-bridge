@@ -62,15 +62,6 @@ export interface Mocked<T> {
   mocked: boolean;
 }
 
-async function getJSON<T>(path: string, fallback: () => T): Promise<Mocked<T>> {
-  try {
-    const r = await fetch(`${BASE}${path}`);
-    if (!r.ok) throw new Error(String(r.status));
-    return { data: (await r.json()) as T, mocked: false };
-  } catch {
-    return { data: fallback(), mocked: true };
-  }
-}
 
 async function postJSON<T>(path: string, body: unknown, fallback: () => T): Promise<Mocked<T>> {
   try {
@@ -86,9 +77,40 @@ async function postJSON<T>(path: string, body: unknown, fallback: () => T): Prom
   }
 }
 
-export function searchMarketplace(q: string, limit = 20): Promise<Mocked<MarketplaceItem[]>> {
+export interface MarketplaceSearchResult {
+  items: MarketplaceItem[];
+  source: "live" | "offline";
+  needsLogin: boolean;
+  reachable: boolean;
+}
+
+// Searches the official Mendix marketplace via the backend (mxcli). Live
+// results require a Mendix login; otherwise the backend returns its offline
+// catalog flagged as such. `refresh` bypasses mxcli's local catalog cache.
+export async function searchMarketplace(
+  q: string,
+  limit = 20,
+  refresh = false,
+): Promise<MarketplaceSearchResult> {
   const query = encodeURIComponent(q);
-  return getJSON(`/marketplace/search?q=${query}&limit=${limit}`, () => mockSearch(q, limit));
+  try {
+    const r = await fetch(`${BASE}/marketplace/search?q=${query}&limit=${limit}${refresh ? "&refresh=1" : ""}`);
+    if (!r.ok) throw new Error(String(r.status));
+    const body = (await r.json()) as
+      | MarketplaceItem[]
+      | { items?: MarketplaceItem[]; source?: "live" | "offline"; needs_login?: boolean };
+    if (Array.isArray(body)) {
+      return { items: body, source: "live", needsLogin: false, reachable: true };
+    }
+    return {
+      items: body.items ?? [],
+      source: body.source ?? "live",
+      needsLogin: body.needs_login ?? false,
+      reachable: true,
+    };
+  } catch {
+    return { items: mockSearch(q, limit), source: "offline", needsLogin: false, reachable: false };
+  }
 }
 
 /** Guarded install: requires confirming Studio Pro is closed; never fakes success. */
@@ -167,6 +189,55 @@ export async function savePage(qn: string, content: string): Promise<SavePageRes
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ qn, content }),
+    });
+    const body = (await r.json().catch(() => ({}))) as Partial<SavePageResult> & { error?: string };
+    if (!r.ok && body.ok === undefined) throw new Error(body.error ?? `Save failed (${r.status}).`);
+    return body as SavePageResult;
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e) };
+  }
+}
+
+export interface MdlResult {
+  ok: boolean;
+  applied: boolean;
+  needsStudioClosed?: boolean;
+  message: string;
+}
+
+/**
+ * Validate (and optionally apply) an arbitrary MDL script against the project.
+ * `apply: false` only runs `mxcli check`; `apply: true` runs `mxcli exec` and
+ * requires Studio Pro to be closed. Powers live editing from the AI chat.
+ */
+export async function runMdl(mdl: string, apply: boolean, studioClosed = false): Promise<MdlResult> {
+  try {
+    const r = await fetch(`${BASE}/mdl`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mdl, apply, studio_closed: studioClosed }),
+    });
+    const body = (await r.json().catch(() => ({}))) as {
+      ok?: boolean; applied?: boolean; needs_studio_closed?: boolean; message?: string; error?: string;
+    };
+    return {
+      ok: body.ok === true,
+      applied: body.applied === true,
+      needsStudioClosed: body.needs_studio_closed,
+      message: body.message ?? body.error ?? `Request failed (${r.status}).`,
+    };
+  } catch (e) {
+    return { ok: false, applied: false, message: String(e instanceof Error ? e.message : e) };
+  }
+}
+
+/** Validate + persist an in-place ALTER PAGE draft (surgical edits). */
+export async function savePageAlter(qn: string, mdl: string): Promise<SavePageResult> {
+  try {
+    const r = await fetch(`${BASE}/page`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ qn, mode: "alter", mdl }),
     });
     const body = (await r.json().catch(() => ({}))) as Partial<SavePageResult> & { error?: string };
     if (!r.ok && body.ok === undefined) throw new Error(body.error ?? `Save failed (${r.status}).`);
