@@ -363,11 +363,11 @@ module MendixBridge
 
       mdl = build_page_mdl(qn, detail, content)
       ok, message = check_mdl(mdl)
+      message = friendly_check_message(message) unless ok
       persist_page_draft(qn, content, mdl, ok, message)
       json(
         response,
-        { ok:, mdl:, message: ok ? "Page MDL validated and draft saved." : message },
-        status: ok ? 200 : 422
+        { ok:, mdl:, message: ok ? "Page MDL validated and draft saved." : "Draft saved (not applied): #{message}" }
       )
     rescue KeyError => error
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
@@ -390,11 +390,11 @@ module MendixBridge
 
       mdl = build_flow_mdl(qn, detail, body)
       ok, message = check_mdl(mdl)
+      message = friendly_check_message(message) unless ok
       persist_draft("flow-plans.json", qn, "body" => body, "mdl" => mdl, "valid" => ok, "message" => message)
       json(
         response,
-        { ok:, mdl:, message: ok ? "Flow MDL validated and draft saved." : message },
-        status: ok ? 200 : 422
+        { ok:, mdl:, message: ok ? "Flow MDL validated and draft saved." : "Draft saved (not applied): #{message}" }
       )
     rescue KeyError => error
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
@@ -607,6 +607,32 @@ module MendixBridge
           .reject { |line| line.start_with?("WARNING:") }.join.strip
         [false, output]
       end
+    end
+
+    # Condenses a raw mxcli syntax-error dump into a one-liner. Detects the
+    # common case where an unrecognised token is a marketplace widget name so
+    # the user gets a actionable hint instead of a wall of grammar errors.
+    def friendly_check_message(message)
+      return message if message.nil? || message.empty?
+
+      # Extract the first unknown token from "mismatched input 'X' expecting"
+      if (m = message.match(/mismatched input '([^']+)'/))
+        token = m[1]
+        # Marketplace widgets often have digits (datagrid2, gallery1, etc.)
+        if token.match?(/[a-z]\w*\d/i) || !%w[
+          container dataview textbox textarea button label image
+          listview layoutgrid row column header footer snippet
+          tabcontainer tabpage groupbox scrollcontainer
+          actionbutton navigationbutton dynamictext statictext
+        ].include?(token.downcase)
+          return "Contains marketplace widget '#{token}' — MDL grammar does not support it. " \
+            "Draft saved; apply via CLI (mxcli exec) after manual review."
+        end
+      end
+
+      # Return only the first error line to avoid the wall of text
+      first = message.lines.first&.strip
+      first&.start_with?("Syntax") ? first : message.lines.first(3).join(" ").gsub(/\s+/, " ").strip
     end
 
     def persist_page_draft(qn, content, mdl, ok, message)
