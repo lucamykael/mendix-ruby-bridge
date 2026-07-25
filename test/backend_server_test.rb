@@ -57,7 +57,14 @@ class BackendServerTest < Minitest::Test
       }
     )
     write_json("inventory/dependencies.json", "schema_version" => 1, "nodes" => 1, "edges" => [])
-    write_json("mendix-project.json", "element_count" => 1, "imported_at" => "2026-07-24T00:00:00Z")
+    @mpr = File.join(@root, "project.mpr")
+    File.write(@mpr, "")
+    write_json(
+      "mendix-project.json",
+      "element_count" => 1,
+      "imported_at" => "2026-07-24T00:00:00Z",
+      "source_project" => @mpr
+    )
     File.write(File.join(@web, "index.html"), "<main>viewer</main>")
     @server = MendixBridge::BackendServer.new(
       inventory_dir: @inventory,
@@ -198,7 +205,60 @@ class BackendServerTest < Minitest::Test
   end
 
   def test_health_reports_page_drafts_capability
-    assert_equal true, get_json("/api/health").dig("capabilities", "page_drafts")
+    health = get_json("/api/health")
+    assert_equal true, health.dig("capabilities", "page_drafts")
+    assert_equal true, health.dig("capabilities", "apply_drafts")
+  end
+
+  def test_applies_a_valid_page_draft
+    post_json(
+      "/api/page",
+      qn: "Module.Home",
+      content: "container c1 {\n  dynamictext t1 (Content: 'Hi')\n}"
+    )
+    drafts_before = get_json("/api/drafts")
+    assert_includes drafts_before["pages"].keys, "Module.Home"
+
+    response = post_json(
+      "/api/apply",
+      qn: "Module.Home",
+      type: "page",
+      studio_closed: true
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code
+    assert body["ok"], body.inspect
+
+    drafts_after = get_json("/api/drafts")
+    refute_includes drafts_after["pages"].keys, "Module.Home"
+  end
+
+  def test_applies_a_valid_flow_draft
+    post_json(
+      "/api/flow",
+      qn: "Module.ACT_Save",
+      body: "  @position(10, 20)\n  return true;"
+    )
+    response = post_json(
+      "/api/apply",
+      qn: "Module.ACT_Save",
+      type: "flow",
+      studio_closed: true
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code
+    assert body["ok"], body.inspect
+
+    drafts_after = get_json("/api/drafts")
+    refute_includes(drafts_after.dig("flows") || {}, "Module.ACT_Save")
+  end
+
+  def test_apply_requires_studio_closed_and_known_draft
+    response = post_json("/api/apply", qn: "Module.Home", type: "page", studio_closed: false)
+    assert_equal "403", response.code
+
+    response = post_json("/api/apply", qn: "Module.Home", type: "page", studio_closed: true)
+    assert_equal "404", response.code
   end
 
   private

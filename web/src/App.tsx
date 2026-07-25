@@ -149,6 +149,7 @@ export default function App() {
         <GitPanel />
       ) : view === "drafts" ? (
         <Drafts
+          health={health}
           onOpen={(qn) => {
             selectByQn(qn);
             setView("explorer");

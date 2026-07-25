@@ -80,6 +80,7 @@ module MendixBridge
       @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
       @server.mount_proc("/api/flow") { |request, response| flow_route(request, response) }
       @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
+      @server.mount_proc("/api/apply") { |request, response| apply_draft_route(request, response) }
       @server.mount_proc("/api/marketplace/install") do |request, response|
         marketplace_install(request, response)
       end
@@ -127,7 +128,8 @@ module MendixBridge
             marketplace_install: source_project ? true : false,
             git: git_workflow ? true : false,
             page_drafts: true,
-            flow_drafts: true
+            flow_drafts: true,
+            apply_drafts: source_project ? true : false
           }
         }
       )
@@ -474,6 +476,66 @@ module MendixBridge
       json(response, { ok: false, message: error.message }, status: 502)
     end
 
+    # Applies a validated page or flow draft to the source .mpr via mxcli exec,
+    # then removes the draft entry and refreshes the inventory.
+    def apply_draft_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      qn = payload.fetch("qn")
+      type = payload.fetch("type")
+      unless payload["studio_closed"] == true
+        return json(
+          response,
+          { ok: false, message: "Confirm Studio Pro is closed before applying." },
+          status: 403
+        )
+      end
+
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      file = type == "flow" ? "flow-plans.json" : "page-plans.json"
+      draft = read_draft(file, qn)
+      return json(response, { error: "draft not found for #{qn}" }, status: 404) unless draft
+      unless draft["valid"]
+        return json(
+          response,
+          { ok: false, message: "Draft is not valid; save a valid version first." },
+          status: 422
+        )
+      end
+
+      mdl = draft["mdl"].to_s
+      if mdl.strip.empty?
+        return json(response, { ok: false, message: "Draft MDL is empty." }, status: 422)
+      end
+
+      Tempfile.create(["mendix-apply-draft-", ".mdl"]) do |file_handle|
+        file_handle.write(mdl)
+        file_handle.flush
+        stdout, stderr, status = Open3.capture3(
+          @mxcli, "exec", file_handle.path, "-p", project
+        )
+        unless status.success?
+          detail = (stderr.empty? ? stdout : stderr).strip
+          return json(response, { ok: false, message: "Apply failed: #{detail}" }, status: 422)
+        end
+      end
+
+      delete_draft(file, qn)
+      refresh_error = refresh_inventory(project)
+      json(
+        response,
+        { ok: true, message: refresh_error || "Draft applied and inventory refreshed." }
+      )
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
     def source_project
       metadata_path = File.join(@inventory_dir, "mendix-project.json")
       return nil unless File.file?(metadata_path)
@@ -489,6 +551,28 @@ module MendixBridge
       nil
     rescue StandardError => error
       "Module installed, but the inventory refresh failed: #{error.message}"
+    end
+
+    def read_draft(file, qn)
+      path = File.join(@inventory_dir, "inventory", file)
+      return nil unless File.file?(path)
+
+      JSON.parse(File.read(path))[qn]
+    rescue JSON::ParserError
+      nil
+    end
+
+    def delete_draft(file, qn)
+      path = File.join(@inventory_dir, "inventory", file)
+      @layout_mutex.synchronize do
+        return unless File.file?(path)
+
+        plans = JSON.parse(File.read(path))
+        plans.delete(qn)
+        temporary = "#{path}.tmp"
+        File.write(temporary, "#{JSON.pretty_generate(plans)}\n")
+        File.rename(temporary, path)
+      end
     end
 
     def page_detail(qn)
