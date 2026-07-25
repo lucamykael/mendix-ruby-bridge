@@ -80,10 +80,17 @@ const FACTORY: Record<string, WidgetDef> = {
   "Headers": { type: "header" },
 };
 
-/** Build a new node for a Toolbox label. */
+/** Build a new node for a Toolbox label. MDL requires a name identifier before
+ * the props parenthesis, so every new widget gets a unique one. */
+let nameCounter = 0;
 export function widgetFromLabel(label: string): EditableNode {
   const def = FACTORY[label] ?? { type: label.toLowerCase().replace(/[^a-z0-9]+/g, ""), props: `Caption: '${label}'` };
-  const node: EditableNode = { id: newId(), type: def.type, props: def.props ?? "" };
+  const node: EditableNode = {
+    id: newId(),
+    type: def.type,
+    name: `${def.type}${++nameCounter}_${Date.now().toString(36).slice(-4)}`,
+    props: def.props ?? "",
+  };
   if (isContainer(def.type)) node.children = [];
   return node;
 }
