@@ -60,7 +60,19 @@ ul.tree ul { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--
 .t-constant { color: #b07fe0; }
 .t-layout, .t-snippet, .t-buildingblock { color: #7f9ac0; }
 
-.canvas { height: 460px; min-height: 320px; border-bottom: 1px solid var(--line); background: var(--code); }
+.canvas { flex: 1; min-height: 320px; border-bottom: 1px solid var(--line); background: var(--code); }
+
+/* editor fills the middle; details live in a collapsible bottom drawer */
+.editor-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.editor-body .canvas, .editor-body .pagebuilder { flex: 1; min-height: 0; }
+.detail-drawer { max-height: 42%; overflow: auto; border-top: 1px solid var(--line); background: var(--bg); }
+.console-bar { display: flex; align-items: center; gap: 6px; padding: 3px 10px;
+  background: var(--panel); border-top: 1px solid var(--line); }
+.console-bar button { background: transparent; border: 0; color: var(--muted); font-size: 11px;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer; }
+.console-bar button:hover { color: var(--fg); }
+.console-bar button.on { background: var(--sel); color: var(--fg); }
+.console-hint { color: var(--muted); font-size: 10px; font-family: ui-monospace, monospace; }
 
 .detail { padding: 18px 22px; }
 .detail h2 { margin: 0 0 2px; font-size: 20px; }

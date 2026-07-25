@@ -42,6 +42,7 @@ export default function App() {
   const [health, setHealth] = useState<BackendHealth>();
   const [sel, setSel] = useState<Selection>();
   const [view, setView] = useState<View>("explorer");
+  const [showDetails, setShowDetails] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? DEFAULT_THEME);
 
   useEffect(() => {
@@ -158,8 +159,21 @@ export default function App() {
                   <span className="editor-kind">{sel.type}</span>
                   <span className="editor-qn">{sel.qn}</span>
                 </div>
-                <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
-                <Detail selection={sel} detail={detail} incoming={incoming} outgoing={outgoing} onSelect={selectByQn} />
+                <div className="editor-body">
+                  <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
+                </div>
+                {showDetails && (
+                  <div className="detail-drawer">
+                    <Detail selection={sel} detail={detail} incoming={incoming} outgoing={outgoing} onSelect={selectByQn} />
+                  </div>
+                )}
+                <div className="console-bar">
+                  <button className={showDetails ? "on" : ""} onClick={() => setShowDetails((s) => !s)}>
+                    Details
+                  </button>
+                  <span className="spacer" />
+                  <span className="console-hint">{sel.type} · {sel.qn}</span>
+                </div>
               </>
             )}
           </main>
