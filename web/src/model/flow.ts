@@ -116,31 +116,36 @@ export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null 
   const g = parseFlow(mdl);
   if (!g || !g.nodes.length) return null;
 
-  // place nodes lacking @position by inheriting from their predecessor
+  // Place nodes lacking @position by walking the graph left-to-right, like
+  // Studio Pro lays microflows out: successors go right, extra branches from a
+  // decision fan out vertically. Real @position coordinates are kept as-is.
   const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
   const posNodes = g.nodes.filter((n) => n.x != null);
-  const baseX = posNodes.length ? Math.round(posNodes.reduce((s, n) => s + (n.x as number), 0) / posNodes.length) : 0;
-  const topY = posNodes.length ? Math.min(...posNodes.map((n) => n.y as number)) : 0;
+  const baseY = posNodes.length ? Math.round(posNodes.reduce((s, n) => s + (n.y as number), 0) / posNodes.length) : 0;
+  const leftX = posNodes.length ? Math.min(...posNodes.map((n) => n.x as number)) : 0;
   if (byId[0] && byId[0].x == null) {
-    byId[0].x = baseX;
-    byId[0].y = topY - 110;
+    byId[0].x = leftX - 230;
+    byId[0].y = baseY;
   }
-  for (let pass = 0; pass < 5; pass++) {
+  const branchCount: Record<number, number> = {};
+  for (let pass = 0; pass < 6; pass++) {
     g.edges.forEach((e) => {
       const to = byId[e.to];
       const from = byId[e.from];
       if (to && to.x == null && from && from.x != null) {
-        to.x = from.x;
-        to.y = (from.y as number) + 110;
+        const branch = branchCount[e.from] ?? 0;
+        branchCount[e.from] = branch + 1;
+        to.x = (from.x as number) + 230;
+        to.y = (from.y as number) + (branch === 0 ? 0 : (branch % 2 ? -1 : 1) * Math.ceil(branch / 2) * 130);
       }
     });
   }
-  let autoY = topY;
+  let autoX = leftX;
   g.nodes.forEach((n) => {
     if (n.x == null) {
-      n.x = baseX + 230;
-      n.y = autoY;
-      autoY += 90;
+      n.x = autoX;
+      n.y = baseY + 200;
+      autoX += 230;
     }
   });
 
@@ -162,8 +167,10 @@ export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null 
     label: e.label ?? undefined,
     animated: false,
     style: { stroke: "var(--edge)" },
-    labelStyle: { fill: "var(--muted)", fontSize: 10 },
-    labelBgStyle: { fill: "var(--canvas-bg)" },
+    labelStyle: { fill: "var(--fg)", fontSize: 10 },
+    labelBgStyle: { fill: "var(--panel)", stroke: "var(--line)" },
+    labelBgPadding: [6, 3] as [number, number],
+    labelBgBorderRadius: 2,
   }));
   return { nodes, edges };
 }

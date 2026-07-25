@@ -86,7 +86,7 @@ function TreeItem({ node, sweep, ...p }: Props & { node: TreeNode; q: string; pa
 
 export default function Tree(p: Props) {
   const [q, setQ] = useState("");
-  const [pagesOnly, setPagesOnly] = useState(false);
+  const pagesOnly = false;
   const [sweep, setSweep] = useState<Sweep>();
   const ql = q.trim().toLowerCase();
   const roots = useMemo(() => p.tree, [p.tree]);
@@ -105,9 +105,6 @@ export default function Tree(p: Props) {
           className="tree-sweep" title="Collapse all"
           onClick={() => setSweep((s) => ({ mode: "collapse", tick: (s?.tick ?? 0) + 1 }))}
         >⊟</button>
-        <label>
-          <input type="checkbox" checked={pagesOnly} onChange={(e) => setPagesOnly(e.target.checked)} /> Pages
-        </label>
       </div>
       <ul className="tree">
         {roots.map((n, i) => (

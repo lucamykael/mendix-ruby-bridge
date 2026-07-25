@@ -8,12 +8,38 @@ import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
 import Drafts from "./components/Drafts";
 import { loadHealth, loadInventory } from "./model/data";
+import { git, type GitStatus } from "./model/api";
 import { collectAssocs } from "./model/er";
 import type { BackendHealth, Inventory, TreeNode } from "./model/types";
 import "./themes.css";
 import "./App.css";
 
 type View = "explorer" | "marketplace" | "git" | "er" | "drafts";
+
+// Studio Pro-style Changes pane: current branch + working-tree state from the
+// guarded git workflow.
+function ChangesPane() {
+  const [status, setStatus] = useState<GitStatus>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    git.status().then(setStatus).catch((e) => setError(String(e instanceof Error ? e.message : e)));
+  }, []);
+  return (
+    <div className="detail-drawer console-pane">
+      {error && <p className="muted">Changes unavailable: {error}</p>}
+      {status && (
+        <>
+          <p>
+            Branch <code>{status.branch}</code> ·{" "}
+            {status.clean ? "no uncommitted changes" : "uncommitted changes in the working tree"}
+            {status.operation_in_progress ? ` · ${status.operation_in_progress} in progress` : ""}
+          </p>
+          <p className="muted">Commit, stash, and switch from the Git tab.</p>
+        </>
+      )}
+    </div>
+  );
+}
 
 // Ruby is the default look; Studio Pro and the editor palettes remain
 // selectable. Keep the default id in sync with the localStorage fallback below.
@@ -42,7 +68,7 @@ export default function App() {
   const [health, setHealth] = useState<BackendHealth>();
   const [sel, setSel] = useState<Selection>();
   const [view, setView] = useState<View>("explorer");
-  const [showDetails, setShowDetails] = useState(false);
+  const [bottomTab, setBottomTab] = useState<"details" | "changes" | "errors" | "console">();
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? DEFAULT_THEME);
 
   useEffect(() => {
@@ -162,15 +188,33 @@ export default function App() {
                 <div className="editor-body">
                   <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
                 </div>
-                {showDetails && (
+                {bottomTab === "details" && (
                   <div className="detail-drawer">
                     <Detail selection={sel} detail={detail} incoming={incoming} outgoing={outgoing} onSelect={selectByQn} />
                   </div>
                 )}
+                {bottomTab === "console" && (
+                  <div className="detail-drawer console-pane">
+                    <p>Backend v{health?.version ?? "?"} · {meta.element_count ?? "?"} elements · {inv.dependencies.edges.length} dependencies</p>
+                    <p className="muted">Guarded writes (git, migrations, marketplace install) run through mxcli with Studio Pro closed.</p>
+                  </div>
+                )}
+                {bottomTab === "changes" && <ChangesPane />}
+                {bottomTab === "errors" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">No consistency errors reported. Run `mx check` via the guarded workflow for a full report.</p>
+                  </div>
+                )}
                 <div className="console-bar">
-                  <button className={showDetails ? "on" : ""} onClick={() => setShowDetails((s) => !s)}>
-                    Details
-                  </button>
+                  {(["details", "changes", "errors", "console"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      className={bottomTab === tab ? "on" : ""}
+                      onClick={() => setBottomTab((current) => (current === tab ? undefined : tab))}
+                    >
+                      {tab[0].toUpperCase() + tab.slice(1)}
+                    </button>
+                  ))}
                   <span className="spacer" />
                   <span className="console-hint">{sel.type} · {sel.qn}</span>
                 </div>
