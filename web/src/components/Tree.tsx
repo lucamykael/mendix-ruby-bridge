@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
 import type { TreeNode } from "../model/types";
 
+// Compact Studio Pro-like glyphs, coloured per type via .t-<type> CSS classes.
 const ICONS: Record<string, string> = {
-  module: "📦", folder: "📁", page: "📄", entity: "🗄️", association: "🔗",
-  microflow: "⚙️", nanoflow: "🔧", enumeration: "🔤", layout: "🧩", snippet: "✂️",
-  domainmodel: "🗂️", security: "🔒", projectsecurity: "🔒", userrole: "👤", modulerole: "👤",
-  navigation: "🧭", settings: "⚙️", javascriptaction: "🟨", javaaction: "☕",
-  buildingblock: "🧱", pagetemplate: "📑", imagecollection: "🖼️", constant: "🔢",
+  module: "▣", folder: "▸", page: "▤", entity: "▦", association: "⤝",
+  microflow: "⚙", nanoflow: "⚡", enumeration: "≔", layout: "◫", snippet: "⌗",
+  domainmodel: "◈", security: "🔒", projectsecurity: "🔒", userrole: "○", modulerole: "○",
+  navigation: "◮", settings: "⚙", javascriptaction: "𝒋", javaaction: "𝒋",
+  buildingblock: "▩", pagetemplate: "▤", imagecollection: "◲", constant: "π",
 };
-const icon = (t: string) => ICONS[t] ?? "•";
+const icon = (t: string) => ICONS[t] ?? "·";
 
 export interface Selection {
   qn: string;
@@ -51,7 +52,7 @@ function TreeItem({ node, ...p }: Props & { node: TreeNode; q: string; pagesOnly
         <span className="twist" onClick={(e) => { e.stopPropagation(); if (kids.length) setOpen((o) => !o); }}>
           {kids.length ? (open || forceOpen ? "▾" : "▸") : ""}
         </span>
-        <span>{icon(node.type)}</span>
+        <span className={`t-ico t-${node.type}`}>{icon(node.type)}</span>
         <span className="label">{node.label || node.qualifiedName}</span>
         {kids.length > 0 && <span className="count">{kids.length}</span>}
       </div>
@@ -74,6 +75,7 @@ export default function Tree(p: Props) {
 
   return (
     <div className="tree-wrap">
+      <div className="tree-title">App Explorer</div>
       <div className="tree-controls">
         <input type="search" placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label>

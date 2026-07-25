@@ -26,14 +26,30 @@ main { flex: 1; min-width: 0; overflow: auto; display: flex; flex-direction: col
 .tree-controls input[type=search] { flex: 1; background: var(--panel2); border: 1px solid var(--line); color: var(--fg); padding: 5px 8px; border-radius: 6px; }
 .tree-controls label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 4px; }
 .tree-wrap { overflow: auto; flex: 1; }
+.tree-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); padding: 9px 12px 4px; }
 ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
-ul.tree ul { padding-left: 15px; }
-.node { display: flex; align-items: center; gap: 6px; padding: 2px 8px; cursor: pointer; white-space: nowrap; border-radius: 5px; }
+ul.tree ul { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--line); }
+.node { display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 4px; cursor: pointer;
+  white-space: nowrap; border-radius: 4px; font-size: 12.5px; line-height: 1.55; }
 .node:hover { background: var(--panel2); }
 .node.selected { background: var(--sel); }
-.node .twist { width: 12px; color: var(--muted); font-size: 10px; }
+.node .twist { width: 11px; color: var(--muted); font-size: 9px; flex: none; }
 .node .label { overflow: hidden; text-overflow: ellipsis; }
-.node .count { color: var(--muted); font-size: 11px; }
+.node .count { color: var(--muted); font-size: 10px; margin-left: 2px; }
+.t-ico { width: 15px; text-align: center; font-size: 11px; flex: none; color: var(--muted); }
+.t-module { color: var(--accent); font-size: 12px; }
+.t-folder { color: #d8a03a; }
+.t-page, .t-pagetemplate { color: #5aa2e0; }
+.t-entity, .t-domainmodel { color: #4ab873; }
+.t-association { color: #4ab873; opacity: .8; }
+.t-microflow { color: #5a8de0; }
+.t-nanoflow { color: #38b2ac; }
+.t-enumeration { color: #b07fe0; }
+.t-security, .t-projectsecurity, .t-userrole, .t-modulerole { color: #d8a03a; font-size: 10px; }
+.t-javascriptaction, .t-javaaction { color: #e0c060; }
+.t-constant { color: #b07fe0; }
+.t-layout, .t-snippet, .t-buildingblock { color: #7f9ac0; }
 
 .canvas { height: 460px; min-height: 320px; border-bottom: 1px solid var(--line); background: var(--code); }
 
