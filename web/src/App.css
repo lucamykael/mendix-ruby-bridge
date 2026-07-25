@@ -34,7 +34,16 @@ ul.tree ul { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--
   white-space: nowrap; border-radius: 4px; font-size: 12.5px; line-height: 1.55; }
 .node:hover { background: var(--panel2); }
 .node.selected { background: var(--sel); }
-.node .twist { width: 11px; color: var(--muted); font-size: 9px; flex: none; }
+.node .twist { flex: none; color: var(--muted); }
+.node .twist.box { width: 13px; height: 13px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 2px; background: var(--panel2);
+  font-size: 10px; line-height: 1; cursor: pointer; }
+.node .twist.box:hover { border-color: var(--accent); color: var(--fg); }
+.node .twist.dot { width: 13px; text-align: center; font-size: 7px; opacity: .55; }
+.tree-find { color: var(--muted); font-size: 11px; }
+.tree-sweep { width: 22px; height: 24px; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 4px; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; }
+.tree-sweep:hover { color: var(--fg); border-color: var(--accent); }
 .node .label { overflow: hidden; text-overflow: ellipsis; }
 .node .count { color: var(--muted); font-size: 10px; margin-left: 2px; }
 .t-ico { width: 15px; text-align: center; font-size: 11px; flex: none; color: var(--muted); }
@@ -172,17 +181,35 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .sp-end { background: var(--canvas-bg); border: 3px solid var(--node-end); }
 .sp-activity {
   display: flex; align-items: center; gap: 8px; min-width: 150px; max-width: 190px;
-  padding: 8px 10px; border-radius: 6px; background: var(--node-activity);
-  color: var(--node-activity-fg); border: 1px solid var(--node-line); font-size: 11px;
-  box-shadow: 0 1px 3px rgba(0,0,0,.35);
+  padding: 9px 11px; border-radius: 10px;
+  background: color-mix(in srgb, var(--node-activity) 22%, var(--panel));
+  color: var(--fg); border: 1.5px solid var(--node-activity); font-size: 11px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
 }
 .sp-act-icon { flex: none; width: 20px; height: 20px; display: grid; place-items: center;
-  background: rgba(255,255,255,.14); border-radius: 4px; font-size: 12px; }
+  background: color-mix(in srgb, var(--node-activity) 45%, transparent);
+  color: var(--fg); border-radius: 50%; font-size: 11px; }
 .sp-act-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-decision { display: flex; flex-direction: column; align-items: center; width: 150px; }
 .sp-decision .sp-caption { font-size: 10px; color: var(--muted); margin-bottom: 4px; text-align: center; line-height: 1.2; }
 .sp-diamond { width: 34px; height: 34px; background: var(--node-decision); border: 1px solid var(--node-line);
   transform: rotate(45deg); border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+
+/* ---- editor chrome (document tabs + toolbar, Studio Pro style) ---- */
+.doc-tabs { display: flex; align-items: flex-end; gap: 2px; background: var(--panel);
+  border-bottom: 1px solid var(--line); padding: 4px 8px 0; }
+.doc-tab { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 6px 12px;
+  font-size: 12px; color: var(--muted); background: var(--panel2);
+  border: 1px solid var(--line); border-bottom: none; border-radius: 7px 7px 0 0; }
+.doc-tab.on { background: var(--canvas-bg); color: var(--fg); position: relative; top: 1px; }
+.doc-tab-module { color: var(--muted); }
+.doc-tab-close { background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0 2px; border-radius: 3px; }
+.doc-tab-close:hover { color: var(--fg); background: var(--sel); }
+.editor-bar { display: flex; align-items: center; gap: 10px; padding: 4px 12px;
+  background: var(--canvas-bg); border-bottom: 1px solid var(--line); }
+.editor-kind { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: capitalize; }
+.editor-qn { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
 
 /* ---- toolbox (right panel, Studio Pro style) ---- */
 .toolbox { width: 224px; border-left: 1px solid var(--line); background: var(--panel);

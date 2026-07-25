@@ -146,6 +146,18 @@ export default function App() {
             {!sel && <p className="empty pad">Select an element to explore it.</p>}
             {sel && detail && (
               <>
+                <div className="doc-tabs">
+                  <div className="doc-tab on">
+                    <span className="doc-tab-label">
+                      {sel.label} <span className="doc-tab-module">[{sel.qn.split(".")[0]}]</span>
+                    </span>
+                    <button className="doc-tab-close" title="Close" onClick={() => setSel(undefined)}>×</button>
+                  </div>
+                </div>
+                <div className="editor-bar">
+                  <span className="editor-kind">{sel.type}</span>
+                  <span className="editor-qn">{sel.qn}</span>
+                </div>
                 <Canvas selection={sel} details={inv.details} assocs={assocs} layouts={inv.layouts} onSelect={selectByQn} />
                 <Detail selection={sel} detail={detail} incoming={incoming} outgoing={outgoing} onSelect={selectByQn} />
               </>
