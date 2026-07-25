@@ -36,6 +36,8 @@ module MendixBridge
       @app_mutex = Mutex.new
       @app_log = []
       @app_pid = nil
+      @app_type = nil       # :docker | :direct
+      @docker_running = false
       @auth_user = nil
       @run_cmd_override = run_cmd
       validate!
@@ -141,8 +143,9 @@ module MendixBridge
             app_run: (source_project && !resolve_run_cmd(source_project).nil?) ? true : false
           },
           app: {
-            running: @app_mutex.synchronize { !@app_pid.nil? },
-            log_length: @app_mutex.synchronize { @app_log.length }
+            running: @app_mutex.synchronize { !@app_pid.nil? || @docker_running },
+            log_length: @app_mutex.synchronize { @app_log.length },
+            mode: @app_mutex.synchronize { @app_type }
           },
           auth: {
             logged_in: !@auth_user.nil?,
@@ -567,28 +570,33 @@ module MendixBridge
     end
 
     def app_run(response)
-      pid = @app_mutex.synchronize { @app_pid }
-      return json(response, { ok: false, message: "Already running.", running: true }, status: 409) if pid
+      already = @app_mutex.synchronize { !@app_pid.nil? || @docker_running }
+      return json(response, { ok: false, message: "Already running.", running: true }, status: 409) if already
 
       project = source_project
       return json(response, { ok: false, message: "No source project configured.", running: false }, status: 503) unless project
 
-      cmd = resolve_run_cmd(project)
+      mode, cmd = resolve_run_mode(project)
       unless cmd
         return json(
           response,
           {
-            ok: false,
-            running: false,
-            message: "No run command configured. Set MRB_RUN_CMD env var (e.g. MRB_RUN_CMD='mx run') or use --run-cmd."
+            ok: false, running: false,
+            message: "No run command found. Add a local mxcli to the project directory, " \
+                     "create a .mendix-run-cmd file, or set MRB_RUN_CMD env var."
           },
           status: 503
         )
       end
 
-      @app_mutex.synchronize { @app_log = ["$ #{cmd.join(' ')}", "Starting…"] }
+      @app_mutex.synchronize do
+        @app_log = ["$ #{cmd.join(' ')}", "Starting…"]
+        @app_type = mode
+        @docker_running = false
+      end
 
       Thread.new do
+        success = false
         begin
           Open3.popen2e(*cmd) do |stdin, stdouterr, wait_thr|
             stdin.close
@@ -599,7 +607,7 @@ module MendixBridge
                 @app_log = @app_log.last(2000)
               end
             end
-            wait_thr.value
+            success = wait_thr.value.success?
           end
         rescue Errno::ENOENT => error
           @app_mutex.synchronize { @app_log << "[ERROR] Command not found: #{error.message}" }
@@ -607,8 +615,15 @@ module MendixBridge
           @app_mutex.synchronize { @app_log << "[ERROR] #{error.message}" }
         ensure
           @app_mutex.synchronize do
-            @app_log << "[Stopped]"
             @app_pid = nil
+            if mode == :docker && success
+              # Containers are running independently; keep @docker_running true
+              @docker_running = true
+              @app_log << "[App running in Docker containers]"
+            else
+              @docker_running = false
+              @app_log << "[Stopped]" unless success && mode == :docker
+            end
           end
         end
       end
@@ -617,56 +632,105 @@ module MendixBridge
     end
 
     def app_stop(response)
+      project = source_project
+      type, docker = @app_mutex.synchronize { [@app_type, @docker_running] }
       pid = @app_mutex.synchronize { @app_pid }
-      unless pid
-        return json(response, { ok: false, message: "No application is running." })
+
+      if type == :docker && (docker || pid)
+        stop_cmd = docker_stop_cmd(project)
+        if stop_cmd
+          Thread.new do
+            @app_mutex.synchronize { @app_log << "$ #{stop_cmd.join(' ')}" }
+            Open3.popen2e(*stop_cmd) do |stdin, stdouterr, wait_thr|
+              stdin.close
+              stdouterr.each_line { |l| @app_mutex.synchronize { @app_log << l.chomp } }
+              wait_thr.value
+            end
+            @app_mutex.synchronize do
+              @docker_running = false
+              @app_pid = nil
+              @app_log << "[Containers stopped]"
+            end
+          rescue StandardError => e
+            @app_mutex.synchronize { @docker_running = false; @app_log << "[ERROR] #{e.message}" }
+          end
+          return json(response, { ok: true, message: "Stopping Docker containers…" })
+        end
       end
-      begin
-        Process.kill("TERM", pid)
-      rescue Errno::ESRCH
-        @app_mutex.synchronize { @app_pid = nil }
+
+      if pid
+        begin
+          Process.kill("TERM", pid)
+        rescue Errno::ESRCH
+          @app_mutex.synchronize { @app_pid = nil }
+        end
+        return json(response, { ok: true, message: "Stop signal sent." })
       end
-      json(response, { ok: true, message: "Stop signal sent." })
+
+      json(response, { ok: false, message: "No application is running." })
     end
 
     def app_status(response)
-      pid, len = @app_mutex.synchronize { [@app_pid, @app_log.length] }
-      json(response, { running: !pid.nil?, log_length: len })
+      pid, docker, len = @app_mutex.synchronize { [@app_pid, @docker_running, @app_log.length] }
+      json(response, { running: !pid.nil? || docker, log_length: len })
     end
 
     def app_log_response(request, response)
       offset = request.query["offset"].to_i.clamp(0, Float::INFINITY)
-      pid, log = @app_mutex.synchronize { [@app_pid, @app_log.dup] }
+      pid, docker, log = @app_mutex.synchronize { [@app_pid, @docker_running, @app_log.dup] }
       lines = log.drop(offset)
-      json(response, { lines: lines, offset: offset + lines.length, running: !pid.nil? })
+      json(response, { lines: lines, offset: offset + lines.length, running: !pid.nil? || docker })
     end
 
-    def resolve_run_cmd(project)
-      # 1. Explicit override (init param or env var)
+    # Returns [mode, cmd_array] where mode is :docker, :direct, or nil
+    def resolve_run_mode(project)
+      # 1. Explicit override → direct
       if (raw = @run_cmd_override || ENV["MRB_RUN_CMD"]) && !raw.strip.empty?
         require "shellwords"
-        return Shellwords.split(raw) + [project]
+        return [:direct, Shellwords.split(raw) + [project]]
       end
 
-      # 2. .mendix-run-cmd file in project directory (one-liner, comments with # ignored)
       project_dir = File.dirname(File.expand_path(project))
+
+      # 2. .mendix-run-cmd file in project directory → direct
       run_file = File.join(project_dir, ".mendix-run-cmd")
       if File.file?(run_file)
         raw = File.read(run_file).lines
           .reject { |l| l.strip.start_with?("#") || l.strip.empty? }.first&.strip
         if raw
           require "shellwords"
-          return Shellwords.split(raw) + [project]
+          return [:direct, Shellwords.split(raw) + [project]]
         end
       end
 
-      # 3. Find 'mx' in PATH
-      mx = which_binary("mx")
-      return [mx, "run", project] if mx
+      # 3. Local mxcli in project directory → docker mode
+      local_mxcli = File.join(project_dir, "mxcli")
+      if File.executable?(local_mxcli)
+        return [:docker, [local_mxcli, "docker", "run", "-p", project]]
+      end
 
-      nil
+      # 4. mx in PATH (Mendix runtime CLI, not MxBuild)
+      mx = which_binary("mx")
+      return [:direct, [mx, "run", project]] if mx
+
+      [nil, nil]
     rescue ArgumentError
-      nil
+      [nil, nil]
+    end
+
+    def docker_stop_cmd(project)
+      return nil unless project
+
+      project_dir = File.dirname(File.expand_path(project))
+      local_mxcli = File.join(project_dir, "mxcli")
+      return nil unless File.executable?(local_mxcli)
+
+      [local_mxcli, "docker", "down", "-p", project]
+    end
+
+    def resolve_run_cmd(project)
+      _, cmd = resolve_run_mode(project)
+      cmd
     end
 
     def which_binary(name)

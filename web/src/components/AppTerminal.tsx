@@ -54,6 +54,7 @@ export default function AppTerminal({ mode, onModeChange, running, onRunningChan
     let active = true;
 
     const poll = async () => {
+      let idleTicks = 0;
       while (active) {
         try {
           const data = await fetchLog(currentOffset);
@@ -61,10 +62,13 @@ export default function AppTerminal({ mode, onModeChange, running, onRunningChan
             setLines((prev) => [...prev, ...data.lines]);
             currentOffset = data.offset;
             setOffset(data.offset);
+            idleTicks = 0;
+          } else {
+            idleTicks++;
           }
           onRunningChange(data.running);
-          if (!data.running && data.lines.length === 0) {
-            await new Promise((r) => setTimeout(r, 2000));
+          // Stop polling only when truly stopped and no new lines for a while
+          if (!data.running && idleTicks > 5) {
             active = false;
           } else {
             await new Promise((r) => setTimeout(r, 400));
