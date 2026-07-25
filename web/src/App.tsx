@@ -2,11 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import Tree, { type Selection } from "./components/Tree";
 import Canvas from "./components/Canvas";
 import Detail from "./components/Detail";
-import Marketplace from "./components/Marketplace";
-import Toolbox from "./components/Toolbox";
 import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
 import Drafts from "./components/Drafts";
+import RightPanel from "./components/RightPanel";
 import { loadHealth, loadInventory } from "./model/data";
 import { git, type GitStatus } from "./model/api";
 import { collectAssocs } from "./model/er";
@@ -14,10 +13,9 @@ import type { BackendHealth, Inventory, TreeNode } from "./model/types";
 import "./themes.css";
 import "./App.css";
 
-type View = "explorer" | "marketplace" | "git" | "er" | "drafts";
+type View = "explorer" | "git" | "er" | "drafts";
+type BottomTab = "details" | "changes" | "errors" | "console" | "find" | "variables" | "debugger" | "breakpoints";
 
-// Studio Pro-style Changes pane: current branch + working-tree state from the
-// guarded git workflow.
 function ChangesPane() {
   const [status, setStatus] = useState<GitStatus>();
   const [error, setError] = useState<string>();
@@ -41,10 +39,7 @@ function ChangesPane() {
   );
 }
 
-// Ruby is the default look; Studio Pro and the editor palettes remain
-// selectable. Keep the default id in sync with the localStorage fallback below.
 const DEFAULT_THEME = "ruby";
-
 const THEMES = [
   { id: "ruby", label: "Ruby" },
   { id: "studio-pro", label: "Studio Pro" },
@@ -54,12 +49,31 @@ const THEMES = [
   { id: "catppuccin", label: "Catppuccin" },
 ];
 
-// Studio Pro shows the System module last; real creation order is not in the
-// inventory, so we approximate by pinning System to the bottom (stable otherwise).
 function orderModules(tree: TreeNode[]): TreeNode[] {
   const rest = tree.filter((n) => !(n.type === "module" && n.label === "System"));
   const system = tree.filter((n) => n.type === "module" && n.label === "System");
   return [...rest, ...system];
+}
+
+type DraftStatus = Map<string, "valid" | "blocked">;
+
+async function loadDraftStatus(): Promise<DraftStatus> {
+  try {
+    const r = await fetch("/api/drafts");
+    if (!r.ok) return new Map();
+    const data = (await r.json()) as {
+      pages: Record<string, { valid?: boolean }>;
+      flows?: Record<string, { valid?: boolean }>;
+    };
+    const m: DraftStatus = new Map();
+    for (const [qn, d] of Object.entries(data.pages ?? {}))
+      m.set(qn, d.valid !== false ? "valid" : "blocked");
+    for (const [qn, d] of Object.entries(data.flows ?? {}))
+      m.set(qn, d.valid !== false ? "valid" : "blocked");
+    return m;
+  } catch {
+    return new Map();
+  }
 }
 
 export default function App() {
@@ -68,12 +82,15 @@ export default function App() {
   const [health, setHealth] = useState<BackendHealth>();
   const [sel, setSel] = useState<Selection>();
   const [view, setView] = useState<View>("explorer");
-  const [bottomTab, setBottomTab] = useState<"details" | "changes" | "errors" | "console">();
+  const [bottomTab, setBottomTab] = useState<BottomTab>();
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? DEFAULT_THEME);
+  const [erModule, setErModule] = useState<string>();
+  const [draftQns, setDraftQns] = useState<DraftStatus>(new Map());
 
   useEffect(() => {
     loadInventory().then(setInv).catch((e) => setError(String(e)));
     loadHealth().then(setHealth).catch(() => setHealth(undefined));
+    loadDraftStatus().then(setDraftQns).catch(() => null);
   }, []);
 
   useEffect(() => {
@@ -97,6 +114,13 @@ export default function App() {
     setSel(found ?? { qn, type: inv.details[qn]?.kind ?? "element", label: qn.split(".").pop() ?? qn });
   };
 
+  const openDomainModel = (moduleName: string) => {
+    setErModule(moduleName);
+    setView("er");
+  };
+
+  const refreshDrafts = () => loadDraftStatus().then(setDraftQns).catch(() => null);
+
   if (error) return (
     <div className="startup-state">
       <img src="/brand/mendix-ruby-bridge.png" alt="" />
@@ -114,25 +138,53 @@ export default function App() {
   const detail = sel ? inv.details[sel.qn] : undefined;
   const incoming = sel ? inv.dependencies.edges.filter((edge) => edge.to === sel.qn) : [];
   const outgoing = sel ? inv.dependencies.edges.filter((edge) => edge.from === sel.qn) : [];
-  const showToolbox = view === "explorer";
+
+  const projectName = meta.source_project?.split("/").pop()?.replace(/\.mpr$/, "") ?? "Mendix Bridge";
+
+  const BOTTOM_TABS: Array<{ id: BottomTab; label: string; stub?: boolean }> = [
+    { id: "details", label: "Details" },
+    { id: "changes", label: "Changes" },
+    { id: "errors", label: "Errors" },
+    { id: "console", label: "Console" },
+    { id: "find", label: "Find Results" },
+    { id: "variables", label: "Variables", stub: true },
+    { id: "debugger", label: "Debugger", stub: true },
+    { id: "breakpoints", label: "Breakpoints", stub: true },
+  ];
 
   return (
     <div className="app">
-      <header>
-        <span className="app-name">
+      <header className="app-header">
+        <span className="app-logo">
           <img src="/brand/mendix-ruby-bridge.png" alt="Mendix Ruby Bridge" />
-          <span>{meta.source_project?.split("/").pop()?.replace(/\.mpr$/, "") ?? "Mendix Bridge"}</span>
         </span>
+
         <nav className="tabs">
           <button className={view === "explorer" ? "on" : ""} onClick={() => setView("explorer")}>App Explorer</button>
           <button className={view === "er" ? "on" : ""} onClick={() => setView("er")}>ER Diagram</button>
-          <button className={view === "marketplace" ? "on" : ""} onClick={() => setView("marketplace")}>Marketplace</button>
-          <button className={view === "drafts" ? "on" : ""} onClick={() => setView("drafts")}>Drafts</button>
+          <button className={view === "drafts" ? "on" : ""} onClick={() => { setView("drafts"); refreshDrafts(); }}>Drafts</button>
           {health?.capabilities?.git && (
             <button className={view === "git" ? "on" : ""} onClick={() => setView("git")}>Git</button>
           )}
         </nav>
-        <span className="spacer" />
+
+        <span className="header-project">{projectName}</span>
+
+        <div className="header-actions">
+          <button className="hdr-btn hdr-run" title="Run application" disabled>▶ Run</button>
+          <button className="hdr-btn hdr-stop" title="Stop application" disabled>■ Stop</button>
+          <button
+            className="hdr-btn hdr-view"
+            title="View running application"
+            onClick={() => window.open("http://localhost:8080", "_blank")}
+          >
+            ⊞ View
+          </button>
+          <button className="hdr-btn hdr-login" title="Login to Mendix" disabled>
+            <span>👤</span>
+          </button>
+        </div>
+
         <label className="theme-pick">
           Theme
           <select value={theme} onChange={(e) => setTheme(e.target.value)}>
@@ -143,9 +195,7 @@ export default function App() {
         </label>
       </header>
 
-      {view === "marketplace" ? (
-        <Marketplace />
-      ) : view === "git" ? (
+      {view === "git" ? (
         <GitPanel />
       ) : view === "drafts" ? (
         <Drafts
@@ -160,6 +210,7 @@ export default function App() {
           tree={tree}
           details={inv.details}
           assocs={assocs}
+          initialModule={erModule}
           onOpenEntity={(qn) => {
             selectByQn(qn);
             setView("explorer");
@@ -168,8 +219,17 @@ export default function App() {
       ) : (
         <div className="layout">
           <aside>
-            <Tree tree={tree} hasDetail={(qn) => !!inv.details[qn]} selected={sel?.qn} onSelect={setSel} />
+            <Tree
+              tree={tree}
+              hasDetail={(qn) => !!inv.details[qn]}
+              selected={sel?.qn}
+              onSelect={setSel}
+              details={inv.details}
+              draftQns={draftQns}
+              onOpenDomainModel={openDomainModel}
+            />
           </aside>
+
           <main>
             {!sel && <p className="empty pad">Select an element to explore it.</p>}
             {sel && detail && (
@@ -206,14 +266,35 @@ export default function App() {
                     <p className="muted">No consistency errors reported. Run `mx check` via the guarded workflow for a full report.</p>
                   </div>
                 )}
+                {bottomTab === "find" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">No active search. Use filter in App Explorer to find elements.</p>
+                  </div>
+                )}
+                {bottomTab === "variables" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">Variables inspector — available during debug session.</p>
+                  </div>
+                )}
+                {bottomTab === "debugger" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">Debugger — connect a running Mendix app to inspect execution.</p>
+                  </div>
+                )}
+                {bottomTab === "breakpoints" && (
+                  <div className="detail-drawer console-pane">
+                    <p className="muted">No breakpoints set.</p>
+                  </div>
+                )}
                 <div className="console-bar">
-                  {(["details", "changes", "errors", "console"] as const).map((tab) => (
+                  {BOTTOM_TABS.map(({ id, label, stub }) => (
                     <button
-                      key={tab}
-                      className={bottomTab === tab ? "on" : ""}
-                      onClick={() => setBottomTab((current) => (current === tab ? undefined : tab))}
+                      key={id}
+                      className={(bottomTab === id ? "on" : "") + (stub ? " stub" : "")}
+                      onClick={() => setBottomTab((cur) => (cur === id ? undefined : id))}
+                      title={stub ? `${label} — coming soon` : label}
                     >
-                      {tab[0].toUpperCase() + tab.slice(1)}
+                      {label}
                     </button>
                   ))}
                   <span className="spacer" />
@@ -222,7 +303,12 @@ export default function App() {
               </>
             )}
           </main>
-          {showToolbox && <Toolbox context={sel?.type} />}
+
+          <RightPanel
+            context={sel?.type}
+            selection={sel}
+            detail={detail}
+          />
         </div>
       )}
 

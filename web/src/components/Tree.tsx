@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { TreeNode } from "../model/types";
+import type { ElementDetail, TreeNode } from "../model/types";
 
-// Compact Studio Pro-like glyphs, coloured per type via .t-<type> CSS classes.
 const ICONS: Record<string, string> = {
   module: "▣", folder: "▸", page: "▤", entity: "▦", association: "⤝",
   microflow: "⚙", nanoflow: "⚡", enumeration: "≔", layout: "◫", snippet: "⌗",
@@ -22,9 +21,11 @@ interface Props {
   hasDetail: (qn: string) => boolean;
   selected?: string;
   onSelect: (sel: Selection) => void;
+  details?: Record<string, ElementDetail>;
+  draftQns?: Map<string, "valid" | "blocked">;
+  onOpenDomainModel?: (moduleName: string) => void;
 }
 
-// Broadcast expand/collapse-all: a tick so every TreeItem reacts once per click.
 interface Sweep {
   mode: "expand" | "collapse";
   tick: number;
@@ -37,12 +38,46 @@ function matches(node: TreeNode, q: string, pagesOnly: boolean): boolean {
   return self || (node.children ?? []).some((c) => matches(c, q, pagesOnly));
 }
 
-function TreeItem({ node, sweep, ...p }: Props & { node: TreeNode; q: string; pagesOnly: boolean; sweep?: Sweep }) {
+function DraftDot({ status }: { status: "valid" | "blocked" }) {
+  return (
+    <span
+      className={`draft-dot draft-dot-${status}`}
+      title={status === "valid" ? "Valid draft pending apply" : "Blocked draft"}
+    />
+  );
+}
+
+function EntityBadge({ persistable }: { persistable?: boolean }) {
+  if (persistable === undefined) return null;
+  return (
+    <span
+      className={`entity-badge ${persistable ? "entity-persistent" : "entity-transient"}`}
+      title={persistable ? "Persistent entity" : "Non-persistent entity"}
+    >
+      {persistable ? "P" : "NP"}
+    </span>
+  );
+}
+
+function TreeItem({
+  node, sweep, details, draftQns, onOpenDomainModel, ...p
+}: Props & {
+  node: TreeNode;
+  q: string;
+  pagesOnly: boolean;
+  sweep?: Sweep;
+  details?: Record<string, ElementDetail>;
+  draftQns?: Map<string, "valid" | "blocked">;
+  onOpenDomainModel?: (moduleName: string) => void;
+}) {
   const kids = node.children ?? [];
   const [open, setOpen] = useState(node.type !== "module" && node.type !== "folder");
   const forceOpen = (p.q || p.pagesOnly) && kids.length > 0;
   const detail = node.qualifiedName ? p.hasDetail(node.qualifiedName) : false;
   const isSel = node.qualifiedName && node.qualifiedName === p.selected;
+  const draftStatus = node.qualifiedName ? draftQns?.get(node.qualifiedName) : undefined;
+  const entityDetail = node.type === "entity" && node.qualifiedName ? details?.[node.qualifiedName] : undefined;
+  const isDomainModel = node.type === "domainmodel";
 
   useEffect(() => {
     if (sweep) setOpen(sweep.mode === "expand");
@@ -50,14 +85,29 @@ function TreeItem({ node, sweep, ...p }: Props & { node: TreeNode; q: string; pa
 
   if ((p.q || p.pagesOnly) && !matches(node, p.q, p.pagesOnly)) return null;
 
+  const handleClick = () => {
+    if (isDomainModel && onOpenDomainModel) {
+      const moduleName = node.qualifiedName?.split(".")[0] ?? node.label;
+      onOpenDomainModel(moduleName);
+      return;
+    }
+    if (detail) p.onSelect({ qn: node.qualifiedName!, type: node.type, label: node.label });
+    else if (kids.length) setOpen((o) => !o);
+  };
+
+  const handleDoubleClick = () => {
+    if (isDomainModel && onOpenDomainModel) {
+      const moduleName = node.qualifiedName?.split(".")[0] ?? node.label;
+      onOpenDomainModel(moduleName);
+    }
+  };
+
   return (
     <li>
       <div
         className={"node" + (isSel ? " selected" : "")}
-        onClick={() => {
-          if (detail) p.onSelect({ qn: node.qualifiedName!, type: node.type, label: node.label });
-          else if (kids.length) setOpen((o) => !o);
-        }}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
       >
         {kids.length ? (
           <span
@@ -71,12 +121,22 @@ function TreeItem({ node, sweep, ...p }: Props & { node: TreeNode; q: string; pa
         )}
         <span className={`t-ico t-${node.type}`}>{icon(node.type)}</span>
         <span className="label">{node.label || node.qualifiedName}</span>
+        {entityDetail && <EntityBadge persistable={entityDetail.persistable} />}
         {kids.length > 0 && <span className="count">{kids.length}</span>}
+        {draftStatus && <DraftDot status={draftStatus} />}
       </div>
       {kids.length > 0 && (open || forceOpen) && (
         <ul>
           {kids.map((c, i) => (
-            <TreeItem key={c.qualifiedName ?? c.label + i} {...p} node={c} sweep={sweep} />
+            <TreeItem
+              key={c.qualifiedName ?? c.label + i}
+              {...p}
+              node={c}
+              sweep={sweep}
+              details={details}
+              draftQns={draftQns}
+              onOpenDomainModel={onOpenDomainModel}
+            />
           ))}
         </ul>
       )}
@@ -108,7 +168,17 @@ export default function Tree(p: Props) {
       </div>
       <ul className="tree">
         {roots.map((n, i) => (
-          <TreeItem key={n.qualifiedName ?? n.label + i} {...p} node={n} q={ql} pagesOnly={pagesOnly} sweep={sweep} />
+          <TreeItem
+            key={n.qualifiedName ?? n.label + i}
+            {...p}
+            node={n}
+            q={ql}
+            pagesOnly={pagesOnly}
+            sweep={sweep}
+            details={p.details}
+            draftQns={p.draftQns}
+            onOpenDomainModel={p.onOpenDomainModel}
+          />
         ))}
       </ul>
     </div>
