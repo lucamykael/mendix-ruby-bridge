@@ -33,7 +33,14 @@ export default function Canvas({ selection, details, assocs, layouts, onSelect }
 
   if (type === "page" && detail) return <PageBuilder selection={selection} detail={detail} onSelect={onSelect} />;
   if ((type === "microflow" || type === "nanoflow") && detail?.mdl)
-    return <FlowCanvas qn={qn} mdl={detail.mdl} savedPositions={layouts[qn]} />;
+    return (
+      <FlowCanvas
+        qn={qn}
+        mdl={detail.mdl}
+        savedPositions={layouts[qn]}
+        parameters={detail.parameters as Array<{ name?: string; type?: string }> | undefined}
+      />
+    );
 
   if (er) {
     return (

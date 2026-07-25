@@ -78,17 +78,9 @@ module MendixBridge
       end
       @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
       @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
-      @server.mount_proc("/api/marketplace/install") do |_request, response|
-        json(
-          response,
-          {
-            ok: false,
-            message:
-              "Marketplace installation is disabled in the viewer. " \
-              "Use mxcli with the guarded Git workflow."
-          },
-          status: 403
-        )
+      @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
+      @server.mount_proc("/api/marketplace/install") do |request, response|
+        marketplace_install(request, response)
       end
       @server.mount(
         "/",
@@ -131,7 +123,7 @@ module MendixBridge
             ),
             layout_persistence: true,
             visual_entity_plans: true,
-            marketplace_install: false,
+            marketplace_install: source_project ? true : false,
             git: git_workflow ? true : false,
             page_drafts: true
           }
@@ -379,6 +371,82 @@ module MendixBridge
       json(response, { error: "invalid JSON payload" }, status: 400)
     end
 
+    # Lists the reviewable drafts saved by the visual builders so the viewer can
+    # surface them (they only exist as inventory sidecars otherwise).
+    def drafts(response)
+      entity_path = File.join(@inventory_dir, "inventory", "visual-plans.json")
+      page_path = File.join(@inventory_dir, "inventory", "page-plans.json")
+      json(
+        response,
+        {
+          entities: File.file?(entity_path) ? JSON.parse(File.read(entity_path)) : {},
+          pages: File.file?(page_path) ? JSON.parse(File.read(page_path)) : {}
+        }
+      )
+    end
+
+    # Guarded marketplace install, Studio Pro-like: downloads the module and
+    # imports it into the source project via mxcli, then refreshes the inventory
+    # so the new module shows up in the explorer. Requires confirming Studio Pro
+    # is closed (the .mpr is locked while it runs).
+    def marketplace_install(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      id = payload.fetch("id").to_s
+      return json(response, { error: "invalid marketplace id" }, status: 422) unless
+        id.match?(/\A\d+\z/)
+      unless payload["studio_closed"] == true
+        return json(
+          response,
+          { ok: false, message: "Confirm Studio Pro is closed before installing." },
+          status: 403
+        )
+      end
+
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      arguments = ["marketplace", "install", id]
+      arguments.concat(["--version", payload["version"].to_s]) if payload["version"]
+      arguments.concat(["-p", project])
+      output = run_mxcli(*arguments)
+      refresh_error = refresh_inventory(project)
+
+      json(
+        response,
+        {
+          ok: true,
+          message: refresh_error || "Module installed and inventory refreshed.",
+          output: output.lines.last(6).join.strip
+        }
+      )
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    rescue BackendServerError => error
+      json(response, { ok: false, message: error.message }, status: 502)
+    end
+
+    def source_project
+      metadata_path = File.join(@inventory_dir, "mendix-project.json")
+      return nil unless File.file?(metadata_path)
+
+      source = JSON.parse(File.read(metadata_path))["source_project"]
+      source if source && File.file?(source)
+    rescue JSON::ParserError
+      nil
+    end
+
+    def refresh_inventory(project)
+      Importer.new(mxcli: @mxcli).import(project, @inventory_dir)
+      nil
+    rescue StandardError => error
+      "Module installed, but the inventory refresh failed: #{error.message}"
+    end
+
     def page_detail(qn)
       path = File.join(@inventory_dir, "inventory", "element-details.json")
       return nil unless File.file?(path)
@@ -407,7 +475,9 @@ module MendixBridge
         stdout, stderr, status = Open3.capture3(@mxcli, "check", file.path)
         return [true, nil] if status.success?
 
-        [false, (stderr.empty? ? stdout : stderr).strip]
+        output = (stderr.empty? ? stdout : stderr).lines
+          .reject { |line| line.start_with?("WARNING:") }.join.strip
+        [false, output]
       end
     end
 

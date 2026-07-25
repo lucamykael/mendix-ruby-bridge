@@ -91,11 +91,23 @@ export function searchMarketplace(q: string, limit = 20): Promise<Mocked<Marketp
   return getJSON(`/marketplace/search?q=${query}&limit=${limit}`, () => mockSearch(q, limit));
 }
 
-export function installMarketplaceItem(id: string, version?: string): Promise<Mocked<{ ok: boolean; message: string }>> {
-  return postJSON(`/marketplace/install`, { id, version }, () => ({
-    ok: false,
-    message: `Backend unavailable or installation disabled for ${id}${version ? "@" + version : ""}.`,
-  }));
+/** Guarded install: requires confirming Studio Pro is closed; never fakes success. */
+export async function installMarketplaceItem(
+  id: string,
+  version: string | undefined,
+  studioClosed: boolean,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const r = await fetch(`${BASE}/marketplace/install`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, version, studio_closed: studioClosed }),
+    });
+    const body = (await r.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
+    return { ok: body.ok === true, message: body.message ?? body.error ?? `Install failed (${r.status}).` };
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e) };
+  }
 }
 
 export function saveLayout(qn: string, positions: NodePosition[]): Promise<Mocked<LayoutResult>> {

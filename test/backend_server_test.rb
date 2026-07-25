@@ -156,6 +156,18 @@ class BackendServerTest < Minitest::Test
     assert_equal "404", unknown.code
   end
 
+  def test_lists_saved_drafts
+    post_json(
+      "/api/page",
+      qn: "Module.Home",
+      content: "container c1 {\n  dynamictext t1 (Content: 'Hi')\n}"
+    )
+
+    drafts = get_json("/api/drafts")
+    assert drafts.key?("entities")
+    assert_includes drafts["pages"].keys, "Module.Home"
+  end
+
   def test_health_reports_page_drafts_capability
     assert_equal true, get_json("/api/health").dig("capabilities", "page_drafts")
   end

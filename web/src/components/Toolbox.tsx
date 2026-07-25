@@ -1,8 +1,10 @@
+import { useMemo, useState } from "react";
+
 // Studio Pro-style toolbox, contextual to the selected editor:
 // - page/snippet -> widget palette (layout, text, buttons, inputs, data, building blocks)
 // - microflow/nanoflow -> activity palette
 // - entity/domain model -> domain palette
-// In this read-only phase it is a visual palette; drag-to-add is future work.
+// Styled after Studio Pro: search on top, collapsible groups, pictogram cards.
 
 type Item = { icon: string; label: string };
 type Group = { title: string; items: Item[] };
@@ -30,24 +32,27 @@ const FLOW_GROUPS: Group[] = [
 ];
 
 const WIDGET_GROUPS: Group[] = [
-  { title: "Layout", items: [
-    { icon: "▭", label: "Container" }, { icon: "▦", label: "Layout grid" }, { icon: "▤", label: "Table" },
-    { icon: "◫", label: "Group box" }, { icon: "❐", label: "Tab container" }, { icon: "⇳", label: "Scroll container" },
-  ] },
-  { title: "Text", items: [
-    { icon: "T", label: "Text" }, { icon: "H", label: "Heading" }, { icon: "🖼", label: "Image" },
-  ] },
-  { title: "Buttons & links", items: [
-    { icon: "⬛", label: "Button" }, { icon: "🔗", label: "Link button" }, { icon: "▶", label: "Action button" },
-  ] },
-  { title: "Input elements", items: [
-    { icon: "▭", label: "Text box" }, { icon: "☐", label: "Check box" }, { icon: "▾", label: "Combo box" },
-    { icon: "◉", label: "Radio buttons" }, { icon: "📅", label: "Date picker" }, { icon: "≡", label: "Drop-down" },
-  ] },
   { title: "Data containers", items: [
     { icon: "▤", label: "Data view" }, { icon: "▦", label: "Data grid 2" }, { icon: "≣", label: "List view" },
     { icon: "🖼", label: "Gallery" }, { icon: "⊞", label: "Template grid" }, { icon: "⤵", label: "Reference selector" },
   ] },
+  { title: "Text", items: [
+    { icon: "𝐀", label: "Text" }, { icon: "𝐇", label: "Heading" }, { icon: "🖼", label: "Image" },
+  ] },
+  { title: "Structure", items: [
+    { icon: "▭", label: "Container" }, { icon: "▥", label: "Layout grid" }, { icon: "▦", label: "Table" },
+    { icon: "◫", label: "Group box" }, { icon: "❐", label: "Tab container" }, { icon: "⇳", label: "Scroll container" },
+  ] },
+  { title: "Buttons & links", items: [
+    { icon: "▣", label: "Button" }, { icon: "🔗", label: "Link button" }, { icon: "▶", label: "Action button" },
+  ] },
+  { title: "Input elements", items: [
+    { icon: "▭", label: "Text box" }, { icon: "☑", label: "Check box" }, { icon: "▾", label: "Combo box" },
+    { icon: "◉", label: "Radio buttons" }, { icon: "📅", label: "Date picker" }, { icon: "≡", label: "Drop-down" },
+  ] },
+];
+
+const BLOCK_GROUPS: Group[] = [
   { title: "Building blocks", items: [
     { icon: "🧱", label: "Cards" }, { icon: "🧱", label: "Lists" }, { icon: "🧱", label: "Headers" },
   ] },
@@ -59,51 +64,89 @@ const DOMAIN_GROUPS: Group[] = [
   ] },
 ];
 
-function groupsFor(context?: string): { title: string; groups: Group[] } {
+function groupsFor(context: string | undefined, tab: string): Group[] {
   switch (context) {
     case "microflow":
     case "nanoflow":
-      return { title: "Toolbox · Activities", groups: FLOW_GROUPS };
+      return FLOW_GROUPS;
     case "entity":
     case "domainmodel":
-      return { title: "Toolbox · Domain", groups: DOMAIN_GROUPS };
-    case "page":
-    case "snippet":
-    case "layout":
-    case "pagetemplate":
-      return { title: "Toolbox · Widgets", groups: WIDGET_GROUPS };
+      return DOMAIN_GROUPS;
     default:
-      return { title: "Toolbox · Widgets", groups: WIDGET_GROUPS };
+      return tab === "blocks" ? BLOCK_GROUPS : WIDGET_GROUPS;
   }
 }
 
 export default function Toolbox({ context }: { context?: string }) {
-  const { title, groups } = groupsFor(context);
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState<"widgets" | "blocks">("widgets");
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+
+  const isPage = !context || ["page", "snippet", "layout", "pagetemplate"].includes(context);
+  const groups = useMemo(() => {
+    const base = groupsFor(context, tab);
+    const q = query.trim().toLowerCase();
+    if (!q) return base;
+    return base
+      .map((g) => ({ ...g, items: g.items.filter((it) => it.label.toLowerCase().includes(q)) }))
+      .filter((g) => g.items.length);
+  }, [context, tab, query]);
+
+  const toggle = (title: string) =>
+    setClosed((prev) => {
+      const next = new Set(prev);
+      if (next.has(title)) next.delete(title);
+      else next.add(title);
+      return next;
+    });
+
   return (
     <div className="toolbox">
-      <div className="toolbox-title">{title}</div>
-      {groups.map((g) => (
-        <div className="tb-group" key={g.title}>
-          <div className="tb-group-title">{g.title}</div>
-          <div className="tb-items">
-            {g.items.map((it) => (
-              <div
-                className="tb-item"
-                key={it.label}
-                title={`Drag onto the canvas to add ${it.label}`}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("application/mrb-item", JSON.stringify(it));
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
-              >
-                <span className="tb-icon">{it.icon}</span>
-                <span className="tb-label">{it.label}</span>
-              </div>
-            ))}
-          </div>
+      <div className="toolbox-title">Toolbox</div>
+      {isPage && (
+        <div className="tb-tabs">
+          <button className={tab === "widgets" ? "on" : ""} onClick={() => setTab("widgets")}>Widgets</button>
+          <button className={tab === "blocks" ? "on" : ""} onClick={() => setTab("blocks")}>Building blocks</button>
         </div>
-      ))}
+      )}
+      <input
+        className="tb-search"
+        type="search"
+        placeholder="Search…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {groups.map((g) => {
+        const open = !closed.has(g.title);
+        return (
+          <div className="tb-group" key={g.title}>
+            <button className="tb-group-title" onClick={() => toggle(g.title)}>
+              <span className={"tb-chev" + (open ? " open" : "")}>▸</span>
+              {g.title}
+            </button>
+            {open && (
+              <div className="tb-items">
+                {g.items.map((it) => (
+                  <div
+                    className="tb-item"
+                    key={it.label}
+                    title={`Drag onto the canvas to add ${it.label}`}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("application/mrb-item", JSON.stringify(it));
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                  >
+                    <span className="tb-icon">{it.icon}</span>
+                    <span className="tb-label">{it.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {!groups.length && <p className="empty pad">No matches.</p>}
     </div>
   );
 }

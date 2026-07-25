@@ -7,6 +7,8 @@ export default function Marketplace() {
   const [mocked, setMocked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string>();
+  const [studioClosed, setStudioClosed] = useState(false);
+  const [installing, setInstalling] = useState<string>();
 
   const run = async (query: string) => {
     setLoading(true);
@@ -21,9 +23,16 @@ export default function Marketplace() {
   }, []);
 
   const install = async (it: MarketplaceItem) => {
-    const { data } = await installMarketplaceItem(it.id, it.latestVersion);
-    setToast(data.message);
-    setTimeout(() => setToast(undefined), 4000);
+    setInstalling(it.id);
+    const result = await installMarketplaceItem(it.id, it.latestVersion, studioClosed);
+    setInstalling(undefined);
+    setToast(result.message);
+    if (result.ok) {
+      // Reload so the imported module shows up in the App Explorer.
+      setTimeout(() => window.location.reload(), 1800);
+    } else {
+      setTimeout(() => setToast(undefined), 6000);
+    }
   };
 
   return (
@@ -43,6 +52,10 @@ export default function Marketplace() {
           />
           <button type="submit">Search</button>
         </form>
+        <label className="git-hint" title="Installing imports the module into the .mpr, which Studio Pro locks while open">
+          <input type="checkbox" checked={studioClosed} onChange={(e) => setStudioClosed(e.target.checked)} />
+          Studio Pro is closed
+        </label>
         {mocked && (
           <span className="mock-badge" title="Backend not connected — showing offline sample data">
             offline sample
@@ -68,8 +81,8 @@ export default function Marketplace() {
                 </div>
                 {it.summary && <div className="market-summary">{it.summary}</div>}
               </div>
-              <button className="w-btn" onClick={() => install(it)}>
-                Install
+              <button className="w-btn" disabled={!studioClosed || installing === it.id} onClick={() => install(it)}>
+                {installing === it.id ? "Installing…" : "Install"}
               </button>
             </div>
           ))}

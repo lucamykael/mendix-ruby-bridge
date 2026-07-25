@@ -51,8 +51,10 @@ function WidgetLeaf({ node, onNavigate }: { node: EditableNode; onNavigate: (qn:
   const p = widgetProps(node);
   const t = node.type.toLowerCase();
 
-  if (t === "statictext" || t === "dynamictext")
-    return <div className="w-text">{p.content ?? p.label ?? "(text)"}</div>;
+  if (t === "statictext" || t === "dynamictext") {
+    const render = node.props.match(/RenderMode:\s*([A-Za-z0-9]+)/i)?.[1]?.toLowerCase() ?? "";
+    return <div className={`w-text rm-${render || "text"}`}>{p.content ?? p.label ?? "(text)"}</div>;
+  }
   if (t === "textbox" || t === "textarea" || t === "datepicker")
     return (
       <label className="w-field">
@@ -89,6 +91,7 @@ export default function PageBuilder({ selection, detail, onSelect }: Props) {
   const [tree, setTree] = useState<EditableNode>(() => withIds(widgetTree(detail.mdl ?? "") ?? emptyPage()));
   const [selectedId, setSelectedId] = useState<string>();
   const [hint, setHint] = useState<string>(); // "parentId:index" of the active drop slot
+  const [mode, setMode] = useState<"structure" | "design">("structure");
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; message: string }>();
   const editingRef = useRef(false); // suppress Delete-key when typing in the props panel
@@ -239,6 +242,14 @@ export default function PageBuilder({ selection, detail, onSelect }: Props) {
         <span className="dot" /><span className="dot" /><span className="dot" />
         <span className="title">{detail.title ?? selection.label}</span>
         {detail.layout && <span className="layout-tag">{detail.layout}</span>}
+        <span className="pb-modes">
+          <button className={mode === "structure" ? "on" : ""} onClick={() => setMode("structure")}>
+            Structure mode
+          </button>
+          <button className={mode === "design" ? "on" : ""} onClick={() => setMode("design")}>
+            Design mode
+          </button>
+        </span>
         <span className="spacer" />
         {status && <span className={status.ok ? "pb-ok" : "pb-err"}>{status.message}</span>}
         <button className="w-btn" onClick={save} disabled={saving}>
@@ -246,7 +257,10 @@ export default function PageBuilder({ selection, detail, onSelect }: Props) {
         </button>
       </div>
       <div className="pb-body">
-        <div className="pageview-canvas" onClick={() => setSelectedId(undefined)}>
+        <div
+          className={"pageview-canvas" + (mode === "design" ? " pb-design" : "")}
+          onClick={() => setSelectedId(undefined)}
+        >
           {empty ? (
             <div
               className="w-drop-empty large"
