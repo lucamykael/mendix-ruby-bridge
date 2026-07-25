@@ -26,12 +26,18 @@ module MendixBridge
       mxcli:,
       bind: "127.0.0.1",
       port: 4567,
-      logger: nil
+      logger: nil,
+      run_cmd: nil
     )
       @inventory_dir = File.expand_path(inventory_dir)
       @web_root = File.expand_path(web_root)
       @mxcli = File.expand_path(mxcli)
       @layout_mutex = Mutex.new
+      @app_mutex = Mutex.new
+      @app_log = []
+      @app_pid = nil
+      @auth_user = nil
+      @run_cmd_override = run_cmd
       validate!
       @server = WEBrick::HTTPServer.new(
         BindAddress: bind,
@@ -81,6 +87,8 @@ module MendixBridge
       @server.mount_proc("/api/flow") { |request, response| flow_route(request, response) }
       @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
       @server.mount_proc("/api/apply") { |request, response| apply_draft_route(request, response) }
+      @server.mount_proc("/api/app") { |request, response| app_route(request, response) }
+      @server.mount_proc("/api/auth") { |request, response| auth_route(request, response) }
       @server.mount_proc("/api/marketplace/install") do |request, response|
         marketplace_install(request, response)
       end
@@ -129,7 +137,16 @@ module MendixBridge
             git: git_workflow ? true : false,
             page_drafts: true,
             flow_drafts: true,
-            apply_drafts: source_project ? true : false
+            apply_drafts: source_project ? true : false,
+            app_run: (source_project && !resolve_run_cmd(source_project).nil?) ? true : false
+          },
+          app: {
+            running: @app_mutex.synchronize { !@app_pid.nil? },
+            log_length: @app_mutex.synchronize { @app_log.length }
+          },
+          auth: {
+            logged_in: !@auth_user.nil?,
+            username: @auth_user
           }
         }
       )
@@ -534,6 +551,153 @@ module MendixBridge
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
     rescue JSON::ParserError
       json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # ---- app run/stop/log ------------------------------------------------
+
+    def app_route(request, response)
+      action = request.path.delete_prefix("/api/app").sub(%r{\A/}, "")
+      case [request.request_method, action]
+      when ["POST", "run"]  then app_run(response)
+      when ["POST", "stop"] then app_stop(response)
+      when ["GET",  "status"] then app_status(response)
+      when ["GET",  "log"]  then app_log_response(request, response)
+      else json(response, { error: "not found" }, status: 404)
+      end
+    end
+
+    def app_run(response)
+      pid = @app_mutex.synchronize { @app_pid }
+      return json(response, { ok: false, message: "Already running.", running: true }, status: 409) if pid
+
+      project = source_project
+      return json(response, { ok: false, message: "No source project configured.", running: false }, status: 503) unless project
+
+      cmd = resolve_run_cmd(project)
+      unless cmd
+        return json(
+          response,
+          {
+            ok: false,
+            running: false,
+            message: "No run command configured. Set MRB_RUN_CMD env var (e.g. MRB_RUN_CMD='mx run') or use --run-cmd."
+          },
+          status: 503
+        )
+      end
+
+      @app_mutex.synchronize { @app_log = ["$ #{cmd.join(' ')}", "Starting…"] }
+
+      Thread.new do
+        begin
+          Open3.popen2e(*cmd) do |stdin, stdouterr, wait_thr|
+            stdin.close
+            @app_mutex.synchronize { @app_pid = wait_thr.pid }
+            stdouterr.each_line do |line|
+              @app_mutex.synchronize do
+                @app_log << line.chomp
+                @app_log = @app_log.last(2000)
+              end
+            end
+            wait_thr.value
+          end
+        rescue Errno::ENOENT => error
+          @app_mutex.synchronize { @app_log << "[ERROR] Command not found: #{error.message}" }
+        rescue StandardError => error
+          @app_mutex.synchronize { @app_log << "[ERROR] #{error.message}" }
+        ensure
+          @app_mutex.synchronize do
+            @app_log << "[Stopped]"
+            @app_pid = nil
+          end
+        end
+      end
+
+      json(response, { ok: true, message: "Starting Mendix application…", running: true })
+    end
+
+    def app_stop(response)
+      pid = @app_mutex.synchronize { @app_pid }
+      unless pid
+        return json(response, { ok: false, message: "No application is running." })
+      end
+      begin
+        Process.kill("TERM", pid)
+      rescue Errno::ESRCH
+        @app_mutex.synchronize { @app_pid = nil }
+      end
+      json(response, { ok: true, message: "Stop signal sent." })
+    end
+
+    def app_status(response)
+      pid, len = @app_mutex.synchronize { [@app_pid, @app_log.length] }
+      json(response, { running: !pid.nil?, log_length: len })
+    end
+
+    def app_log_response(request, response)
+      offset = request.query["offset"].to_i.clamp(0, Float::INFINITY)
+      pid, log = @app_mutex.synchronize { [@app_pid, @app_log.dup] }
+      lines = log.drop(offset)
+      json(response, { lines: lines, offset: offset + lines.length, running: !pid.nil? })
+    end
+
+    def resolve_run_cmd(project)
+      raw = @run_cmd_override || ENV["MRB_RUN_CMD"]
+      return nil unless raw && !raw.strip.empty?
+
+      require "shellwords"
+      Shellwords.split(raw) + [project]
+    rescue ArgumentError
+      nil
+    end
+
+    # ---- auth (Mendix marketplace login) ---------------------------------
+
+    def auth_route(request, response)
+      action = request.path.delete_prefix("/api/auth").sub(%r{\A/}, "")
+      case [request.request_method, action]
+      when ["GET",  "status"] then auth_status(response)
+      when ["POST", "login"]  then auth_login(request, response)
+      when ["POST", "logout"] then auth_logout(response)
+      else json(response, { error: "not found" }, status: 404)
+      end
+    end
+
+    def auth_status(response)
+      json(response, { logged_in: !@auth_user.nil?, username: @auth_user })
+    end
+
+    def auth_login(request, response)
+      payload = JSON.parse(request.body.to_s)
+      username = payload.fetch("username").to_s.strip
+      password = payload.fetch("password").to_s
+      return json(response, { ok: false, message: "Username is required." }, status: 400) if username.empty?
+      return json(response, { ok: false, message: "Password is required." }, status: 400) if password.empty?
+
+      stdout, stderr, status = Open3.capture3(@mxcli, "login", username, password)
+      if status.success?
+        @auth_user = username
+        json(response, { ok: true, message: "Logged in as #{username}.", username: username })
+      else
+        msg = (stderr.empty? ? stdout : stderr).strip
+        json(response, { ok: false, message: msg.empty? ? "Login failed." : msg }, status: 401)
+      end
+    rescue KeyError => error
+      json(response, { error: "missing parameter: #{error.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    rescue BackendServerError => error
+      json(response, { ok: false, message: error.message }, status: 502)
+    end
+
+    def auth_logout(response)
+      if @auth_user
+        run_mxcli("logout") rescue nil
+        @auth_user = nil
+        json(response, { ok: true, message: "Logged out." })
+      else
+        json(response, { ok: false, message: "Not logged in." })
+      end
     end
 
     def source_project

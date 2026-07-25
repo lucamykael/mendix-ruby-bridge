@@ -6,6 +6,8 @@ import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
 import Drafts from "./components/Drafts";
 import RightPanel from "./components/RightPanel";
+import AppTerminal, { type TerminalMode } from "./components/AppTerminal";
+import LoginModal from "./components/LoginModal";
 import { loadHealth, loadInventory } from "./model/data";
 import { git, type GitStatus } from "./model/api";
 import { collectAssocs } from "./model/er";
@@ -86,10 +88,19 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("mrb-theme") ?? DEFAULT_THEME);
   const [erModule, setErModule] = useState<string>();
   const [draftQns, setDraftQns] = useState<DraftStatus>(new Map());
+  const [terminalMode, setTerminalMode] = useState<TerminalMode>("hidden");
+  const [appRunning, setAppRunning] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [authUser, setAuthUser] = useState<string | null>(null);
 
   useEffect(() => {
     loadInventory().then(setInv).catch((e) => setError(String(e)));
-    loadHealth().then(setHealth).catch(() => setHealth(undefined));
+    loadHealth().then((h) => {
+      setHealth(h);
+      if (h.app?.running) { setAppRunning(true); setTerminalMode("docked"); }
+      if (h.auth?.logged_in) { setLoggedIn(true); setAuthUser(h.auth.username ?? null); }
+    }).catch(() => setHealth(undefined));
     loadDraftStatus().then(setDraftQns).catch(() => null);
   }, []);
 
@@ -170,18 +181,61 @@ export default function App() {
 
         <span className="header-project">{projectName}</span>
 
+        <span className="spacer" />
+
         <div className="header-actions">
-          <button className="hdr-btn hdr-run" title="Run application" disabled>▶ Run</button>
-          <button className="hdr-btn hdr-stop" title="Stop application" disabled>■ Stop</button>
+          <button
+            className="hdr-btn hdr-run"
+            title={health?.capabilities?.app_run ? "Run application" : "Configure MRB_RUN_CMD to enable"}
+            disabled={appRunning || !health?.capabilities?.app_run}
+            onClick={async () => {
+              const r = await fetch("/api/app/run", { method: "POST" });
+              const body = (await r.json()) as { ok?: boolean; message?: string };
+              if (r.ok || r.status === 409) {
+                setAppRunning(true);
+                setTerminalMode("docked");
+              } else {
+                setTerminalMode("docked");
+                setAppRunning(false);
+              }
+              void body;
+            }}
+          >
+            ▶ Run
+          </button>
+          <button
+            className="hdr-btn hdr-stop"
+            title="Stop application"
+            disabled={!appRunning}
+            onClick={async () => {
+              await fetch("/api/app/stop", { method: "POST" });
+            }}
+          >
+            ■ Stop
+          </button>
           <button
             className="hdr-btn hdr-view"
-            title="View running application"
+            title={appRunning ? "View running application" : "Application is not running"}
+            disabled={!appRunning}
             onClick={() => window.open("http://localhost:8080", "_blank")}
           >
             ⊞ View
           </button>
-          <button className="hdr-btn hdr-login" title="Login to Mendix" disabled>
-            <span>👤</span>
+          {terminalMode === "minimized" && (
+            <button
+              className="hdr-btn hdr-term"
+              title="Show application console"
+              onClick={() => setTerminalMode("docked")}
+            >
+              {appRunning ? "▶" : "■"} Console
+            </button>
+          )}
+          <button
+            className={`hdr-btn hdr-login ${loggedIn ? "hdr-login-on" : ""}`}
+            title={loggedIn ? `Logged in as ${authUser ?? ""}` : "Login to Mendix"}
+            onClick={() => setShowLogin(true)}
+          >
+            👤{loggedIn && <span className="hdr-login-user">{authUser?.split("@")[0]}</span>}
           </button>
         </div>
 
@@ -310,6 +364,20 @@ export default function App() {
             detail={detail}
           />
         </div>
+      )}
+
+      <AppTerminal
+        mode={terminalMode}
+        onModeChange={setTerminalMode}
+        running={appRunning}
+        onRunningChange={setAppRunning}
+      />
+
+      {showLogin && (
+        <LoginModal
+          onClose={() => setShowLogin(false)}
+          onAuthChange={(s) => { setLoggedIn(s.logged_in); setAuthUser(s.username); }}
+        />
       )}
 
       <footer className="statusbar">

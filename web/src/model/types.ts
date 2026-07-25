@@ -91,6 +91,8 @@ export interface BackendHealth {
   element_count?: number;
   imported_at?: string;
   capabilities: Record<string, boolean>;
+  app?: { running: boolean; log_length: number };
+  auth?: { logged_in: boolean; username: string | null };
 }
 
 export interface Inventory {
