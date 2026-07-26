@@ -6,7 +6,8 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VERSION=$(ruby -r "$ROOT_DIR/lib/mendix_bridge/version" -e "puts MendixBridge::VERSION")
 PKG_NAME="mendix-ruby-bridge"
-BUILD_DIR="$SCRIPT_DIR/deb-build"
+STAGING="$SCRIPT_DIR/.staging"
+OUTPUT="$SCRIPT_DIR/${PKG_NAME}_${VERSION}_all.deb"
 
 if ! command -v fpm &>/dev/null; then
   echo "fpm is required. Install with: gem install fpm"
@@ -15,56 +16,61 @@ fi
 
 echo "Building .deb for $PKG_NAME $VERSION..."
 
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR/usr/share/applications"
-mkdir -p "$BUILD_DIR/usr/share/icons"
-
-# Desktop entry
-cp "$ROOT_DIR/share/applications/mendix-ruby-bridge.desktop" \
-   "$BUILD_DIR/usr/share/applications/"
-
-# Icons
-cp -r "$ROOT_DIR/share/icons/hicolor" "$BUILD_DIR/usr/share/icons/"
-
-# Build the gem first
+# --- Build gem ---
 cd "$ROOT_DIR"
-gem build mendix-ruby-bridge.gemspec -o "$SCRIPT_DIR/${PKG_NAME}-${VERSION}.gem"
+GEM_FILE="$SCRIPT_DIR/${PKG_NAME}-${VERSION}.gem"
+gem build mendix-ruby-bridge.gemspec --output "$GEM_FILE"
 
+# --- Staging layout ---
+rm -rf "$STAGING"
+GEM_HOME="$STAGING/usr/lib/ruby/gems"
+mkdir -p "$GEM_HOME"
+
+gem install \
+  --local \
+  --no-document \
+  --ignore-dependencies \
+  --install-dir "$GEM_HOME" \
+  --bindir "$STAGING/usr/bin" \
+  "$GEM_FILE"
+
+# Desktop entry + icons from gem files
+GEM_DIR="$GEM_HOME/gems/${PKG_NAME}-${VERSION}"
+
+install -Dm644 "$GEM_DIR/share/applications/mendix-ruby-bridge.desktop" \
+  "$STAGING/usr/share/applications/mendix-ruby-bridge.desktop"
+
+for size in 32 48 64 128 256 512; do
+  icon="$GEM_DIR/share/icons/hicolor/${size}x${size}/apps/mendix-ruby-bridge.png"
+  [[ -f "$icon" ]] && install -Dm644 "$icon" \
+    "$STAGING/usr/share/icons/hicolor/${size}x${size}/apps/mendix-ruby-bridge.png"
+done
+
+# Wrappers: ensure shebangs work with system ruby
+for bin in mendix-ruby mendix-desktop mendix-git git-mendix mendix-apply; do
+  wrapper="$STAGING/usr/bin/$bin"
+  [[ -f "$wrapper" ]] && sed -i '1s|.*|#!/usr/bin/env ruby|' "$wrapper"
+done
+
+# --- Build .deb ---
 fpm \
-  --input-type gem \
+  --input-type dir \
   --output-type deb \
   --name "$PKG_NAME" \
   --version "$VERSION" \
   --maintainer "Mykael <myklpm@gmail.com>" \
   --description "Read, model, validate, and change Mendix projects with Ruby" \
   --url "https://github.com/lucamykael/mendix-ruby-bridge" \
-  --depends "ruby >= 3.2" \
+  --license MIT \
+  --depends "ruby (>= 3.2)" \
   --depends "ruby-gtk3" \
   --depends "gir1.2-webkit2-4.0 | gir1.2-webkit2-4.1" \
   --after-install "$SCRIPT_DIR/debian/postinst" \
   --before-remove "$SCRIPT_DIR/debian/prerm" \
   --deb-no-default-config-files \
-  --package "$SCRIPT_DIR/${PKG_NAME}_${VERSION}_all.deb" \
-  "$SCRIPT_DIR/${PKG_NAME}-${VERSION}.gem"
-
-# Copy extra files into the deb (desktop entry + icons)
-# fpm handles the gem install; we add the share/ files via a second pass
-fpm \
-  --input-type dir \
-  --output-type deb \
-  --name "${PKG_NAME}-desktop" \
-  --version "$VERSION" \
-  --maintainer "Mykael <myklpm@gmail.com>" \
-  --description "Desktop integration files for mendix-ruby-bridge" \
-  --url "https://github.com/lucamykael/mendix-ruby-bridge" \
-  --depends "$PKG_NAME = $VERSION" \
-  --after-install "$SCRIPT_DIR/debian/postinst" \
-  --deb-no-default-config-files \
-  --package "$SCRIPT_DIR/${PKG_NAME}-desktop_${VERSION}_all.deb" \
-  --chdir "$BUILD_DIR" \
-  usr/share/applications usr/share/icons
+  --package "$OUTPUT" \
+  --chdir "$STAGING" \
+  usr
 
 echo ""
-echo "Built:"
-echo "  $SCRIPT_DIR/${PKG_NAME}_${VERSION}_all.deb       (CLI + gem)"
-echo "  $SCRIPT_DIR/${PKG_NAME}-desktop_${VERSION}_all.deb (desktop entry + icons)"
+echo "Built: $OUTPUT"
