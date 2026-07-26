@@ -1,26 +1,119 @@
-#!/usr/bin/env ruby
-# frozen_string_literal: true
+#!/usr/bin/env python3
+"""Native desktop launcher for Mendix Ruby Bridge (GTK3 + WebKit2, via PyGObject)."""
 
-require "optparse"
-require_relative "../lib/mendix_bridge"
+import argparse
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
 
-parser = OptionParser.new do |opts|
-  opts.banner = "Usage: mendix-desktop [IMPORTED_DIR]"
-  opts.on("-v", "--version", "Print version") do
-    puts MendixBridge::VERSION
-    exit
-  end
-end
-parser.parse!
+TITLE = "Mendix Ruby Bridge"
+WIDTH = 1280
+HEIGHT = 800
+READY_TIMEOUT = 15
 
-unless ARGV.length <= 1
-  warn parser
-  exit 1
-end
 
-inventory_dir = File.expand_path(
-  ARGV.shift || MendixBridge::Config.find&.inventory || "."
-)
-bridge_dir = File.expand_path("..", __dir__)
+def find_mendix_ruby():
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    candidate = os.path.join(script_dir, "mendix-ruby")
+    if os.path.isfile(candidate):
+        return candidate
+    return "mendix-ruby"
 
-MendixBridge::DesktopApp.new(inventory_dir:, bridge_dir:).run
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def wait_for_port(port, timeout=READY_TIMEOUT):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.1).close()
+            return
+        except OSError:
+            time.sleep(0.1)
+    print(f"mendix-desktop: backend did not start within {timeout}s", file=sys.stderr)
+    sys.exit(1)
+
+
+def require_gi():
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+        from gi.repository import Gtk, WebKit2
+        return Gtk, WebKit2
+    except (ImportError, ValueError):
+        pass
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.0")
+        from gi.repository import Gtk, WebKit2
+        return Gtk, WebKit2
+    except (ImportError, ValueError):
+        print(
+            "mendix-desktop requires python-gobject and webkit2gtk.\n"
+            "Install with:  sudo pacman -S python-gobject webkit2gtk-4.1",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=TITLE)
+    parser.add_argument("inventory_dir", nargs="?", default=".", help="Imported inventory directory")
+    parser.add_argument("--version", action="store_true", help="Print version and exit")
+    args = parser.parse_args()
+
+    if args.version:
+        mendix_ruby = find_mendix_ruby()
+        subprocess.run([mendix_ruby, "version"])
+        return
+
+    Gtk, WebKit2 = require_gi()
+
+    inventory_dir = os.path.realpath(args.inventory_dir)
+    port = free_port()
+    mendix_ruby = find_mendix_ruby()
+
+    proc = subprocess.Popen(
+        [mendix_ruby, "serve", inventory_dir, "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    def cleanup(*_):
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        Gtk.main_quit()
+
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
+
+    wait_for_port(port)
+
+    win = Gtk.Window(title=TITLE)
+    win.set_default_size(WIDTH, HEIGHT)
+    win.set_position(Gtk.WindowPosition.CENTER)
+    win.connect("destroy", cleanup)
+
+    webview = WebKit2.WebView()
+    webview.load_uri(f"http://127.0.0.1:{port}")
+    win.add(webview)
+    win.show_all()
+
+    Gtk.main()
+    proc.terminate()
+
+
+if __name__ == "__main__":
+    main()

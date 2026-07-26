@@ -62,8 +62,9 @@ fpm \
   --description "Read, model, validate, and change Mendix projects with Ruby" \
   --url "https://github.com/lucamykael/mendix-ruby-bridge" \
   --license MIT \
-  --depends "ruby (>= 3.2)" \
-  --depends "ruby-gtk3" \
+  --depends "ruby >= 3.2" \
+  --depends "python3" \
+  --depends "python3-gi" \
   --depends "gir1.2-webkit2-4.0 | gir1.2-webkit2-4.1" \
   --after-install "$SCRIPT_DIR/debian/postinst" \
   --before-remove "$SCRIPT_DIR/debian/prerm" \

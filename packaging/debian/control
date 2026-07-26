@@ -3,7 +3,7 @@ Version: VERSION_PLACEHOLDER
 Section: devel
 Priority: optional
 Architecture: all
-Depends: ruby (>= 3.2), ruby-gtk3, gir1.2-webkit2-4.0 | gir1.2-webkit2-4.1
+Depends: ruby (>= 3.2), python3, python3-gi, gir1.2-webkit2-4.0 | gir1.2-webkit2-4.1
 Maintainer: Mykael <myklpm@gmail.com>
 Homepage: https://github.com/lucamykael/mendix-ruby-bridge
 Description: Read, model, validate, and change Mendix projects with Ruby
