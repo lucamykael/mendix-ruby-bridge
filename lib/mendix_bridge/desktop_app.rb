@@ -19,6 +19,7 @@ module MendixBridge
 
     def run
       require_gtk!
+      configure_env!
 
       port = free_port
       start_backend(port)
@@ -34,6 +35,13 @@ module MendixBridge
     end
 
     private
+
+    def configure_env!
+      # WebKit2GTK crashes on Wayland with a protocol error; XWayland is stable.
+      # GPU compositing also fails on XWayland with some drivers (GBM buffer errors).
+      ENV["GDK_BACKEND"] ||= "x11"
+      ENV["WEBKIT_DISABLE_COMPOSITING_MODE"] ||= "1"
+    end
 
     def require_gtk!
       require "gtk3"
@@ -98,7 +106,7 @@ module MendixBridge
       window.set_default_size(WINDOW_WIDTH, WINDOW_HEIGHT)
       window.set_window_position(:center)
 
-      webview = WebKit2::WebView.new
+      webview = WebKit2Gtk::WebView.new
       webview.load_uri("http://127.0.0.1:#{port}")
 
       window.add(webview)
