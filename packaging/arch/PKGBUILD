@@ -1,0 +1,52 @@
+# Maintainer: Mykael <myklpm@gmail.com>
+pkgname=mendix-ruby-bridge
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Read, model, validate, and change Mendix projects with Ruby"
+arch=('any')
+url="https://github.com/lucamykael/mendix-ruby-bridge"
+license=('MIT')
+depends=('ruby' 'ruby-gtk3' 'webkit2gtk')
+optdepends=('docker: for mxcli Docker-based Mendix CLI')
+source=("https://rubygems.org/gems/${pkgname}-${pkgver}.gem")
+noextract=("${pkgname}-${pkgver}.gem")
+sha256sums=('SKIP')
+
+package() {
+  local gemdir
+  gemdir="$(ruby -e 'puts Gem.default_dir')"
+
+  gem install \
+    --local \
+    --no-document \
+    --ignore-dependencies \
+    --install-dir "${pkgdir}${gemdir}" \
+    --bindir "${pkgdir}/usr/bin" \
+    "${srcdir}/${pkgname}-${pkgver}.gem"
+
+  # Desktop entry
+  install -Dm644 "${pkgdir}${gemdir}/gems/${pkgname}-${pkgver}/share/applications/mendix-ruby-bridge.desktop" \
+    "${pkgdir}/usr/share/applications/mendix-ruby-bridge.desktop"
+
+  # Icons
+  for size in 32 48 64 128 256 512; do
+    local icon="${pkgdir}${gemdir}/gems/${pkgname}-${pkgver}/share/icons/hicolor/${size}x${size}/apps/mendix-ruby-bridge.png"
+    if [[ -f "$icon" ]]; then
+      install -Dm644 "$icon" \
+        "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/mendix-ruby-bridge.png"
+    fi
+  done
+
+  # License
+  install -Dm644 "${pkgdir}${gemdir}/gems/${pkgname}-${pkgver}/LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+post_install() {
+  gtk-update-icon-cache /usr/share/icons/hicolor &>/dev/null || true
+  update-desktop-database /usr/share/applications &>/dev/null || true
+}
+
+post_upgrade() {
+  post_install
+}

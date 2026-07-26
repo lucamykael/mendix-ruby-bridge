@@ -542,11 +542,27 @@ when "view"
   output = MendixBridge::HtmlViewer.write(imported_dir, options[:output])
   puts "Wrote inventory viewer to #{output}"
   puts "Open it in a browser: file://#{output}"
+when "desktop"
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: mendix-ruby desktop [IMPORTED_DIR]"
+  end
+  parser.parse!
+  inventory_dir = File.expand_path(
+    ARGV.shift || project_config&.inventory || "."
+  )
+  unless ARGV.empty?
+    warn parser
+    exit 1
+  end
+
+  bridge_dir = File.expand_path("..", __dir__)
+  MendixBridge::DesktopApp.new(inventory_dir:, bridge_dir:).run
 else
   warn <<~USAGE
     Usage:
       mendix-ruby setup
       mendix-ruby serve [IMPORTED_DIR] [--bind ADDRESS] [--port PORT]
+      mendix-ruby desktop [IMPORTED_DIR]
       mendix-ruby configure --project APP.mpr --inventory DIR --model APP.rb
       mendix-ruby deps ELEMENT [IMPORTED_DIR] [options]
       mendix-ruby migrate MIGRATION.rb --project APP.mpr [--dry-run]

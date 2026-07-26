@@ -28,6 +28,7 @@ require_relative "mendix_bridge/backend_server"
 require_relative "mendix_bridge/visual_entity_plan"
 require_relative "mendix_bridge/html_viewer"
 require_relative "mendix_bridge/git_workflow"
+require_relative "mendix_bridge/desktop_app"
 
 module MendixBridge
   class << self

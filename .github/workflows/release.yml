@@ -13,24 +13,60 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "4.0"
           bundler-cache: true
+
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
+
       - run: npm ci
         working-directory: web
+
       - run: npm run build
         working-directory: web
+
       - run: git diff --exit-code -- web/dist
+
       - run: bundle exec rake test
+
       - name: Verify tag matches gem version
         run: test "$GITHUB_REF_NAME" = "v$(ruby -Ilib -rmendix_bridge/version -e 'print MendixBridge::VERSION')"
-      - run: mkdir -p pkg && gem build mendix-ruby-bridge.gemspec --output pkg/mendix-ruby-bridge-${GITHUB_REF_NAME#v}.gem
-      - run: gh release create "$GITHUB_REF_NAME" pkg/*.gem --generate-notes
+
+      - name: Build gem
+        run: |
+          mkdir -p pkg
+          gem build mendix-ruby-bridge.gemspec --output "pkg/mendix-ruby-bridge-${GITHUB_REF_NAME#v}.gem"
+
+      - name: Build .deb
+        run: |
+          sudo apt-get install -y ruby-dev
+          gem install fpm --no-document
+          bash packaging/build-deb.sh
+          cp packaging/mendix-ruby-bridge_*.deb pkg/
+
+      - name: Update PKGBUILD sha256
+        run: |
+          GEM="pkg/mendix-ruby-bridge-${GITHUB_REF_NAME#v}.gem"
+          SHA=$(sha256sum "$GEM" | awk '{print $1}')
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${VERSION}/" \
+            -e "s/^sha256sums=.*/sha256sums=('${SHA}')/" \
+            packaging/arch/PKGBUILD
+          cp packaging/arch/PKGBUILD pkg/PKGBUILD
+
+      - name: Create GitHub release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            pkg/mendix-ruby-bridge-*.gem \
+            pkg/mendix-ruby-bridge_*.deb \
+            pkg/PKGBUILD \
+            --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

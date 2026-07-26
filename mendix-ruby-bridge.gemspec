@@ -17,15 +17,17 @@ Gem::Specification.new do |spec|
   }
   spec.files = Dir[
     "lib/**/*.rb",
-    "bin/{mendix-ruby,mendix-git,git-mendix,mendix-apply}",
+    "bin/{mendix-ruby,mendix-desktop,mendix-git,git-mendix,mendix-apply}",
     "bin/{mxcli,setup-tools}",
     "web/dist/**/*",
+    "share/applications/mendix-ruby-bridge.desktop",
+    "share/icons/hicolor/*/apps/mendix-ruby-bridge.png",
     ".mxcli-version",
     "README.md",
     "LICENSE"
   ]
   spec.bindir = "bin"
-  spec.executables = ["mendix-ruby", "mendix-git", "git-mendix", "mendix-apply"]
+  spec.executables = ["mendix-ruby", "mendix-desktop", "mendix-git", "git-mendix", "mendix-apply"]
   spec.require_paths = ["lib"]
   spec.required_ruby_version = ">= 3.2"
 

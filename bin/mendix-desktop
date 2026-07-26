@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require_relative "../lib/mendix_bridge"
+
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: mendix-desktop [IMPORTED_DIR]"
+  opts.on("-v", "--version", "Print version") do
+    puts MendixBridge::VERSION
+    exit
+  end
+end
+parser.parse!
+
+unless ARGV.length <= 1
+  warn parser
+  exit 1
+end
+
+inventory_dir = File.expand_path(
+  ARGV.shift || MendixBridge::Config.find&.inventory || "."
+)
+bridge_dir = File.expand_path("..", __dir__)
+
+MendixBridge::DesktopApp.new(inventory_dir:, bridge_dir:).run
