@@ -1,0 +1,13 @@
+Package: mendix-ruby-bridge
+Version: VERSION_PLACEHOLDER
+Section: devel
+Priority: optional
+Architecture: all
+Depends: ruby (>= 3.2), ruby-gtk3, gir1.2-webkit2-4.0 | gir1.2-webkit2-4.1
+Maintainer: Mykael <myklpm@gmail.com>
+Homepage: https://github.com/lucamykael/mendix-ruby-bridge
+Description: Read, model, validate, and change Mendix projects with Ruby
+ A Ruby DSL and CLI for semantic Mendix inventories, guarded writes,
+ Git workflows, dependency analysis, migrations, and project creation.
+ .
+ Includes mendix-desktop, a native GTK window for the web interface.

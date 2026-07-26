@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+
+gem uninstall mendix-ruby-bridge --executables --ignore-dependencies 2>/dev/null || true
