@@ -261,6 +261,119 @@ class BackendServerTest < Minitest::Test
     assert_equal "404", response.code
   end
 
+  def test_xas_status_disabled_by_default
+    status = get_json("/api/xas/status")
+    assert_equal false, status["enabled"]
+    assert_equal 0, status["log_size"]
+    assert_equal 8080, status["target_port"]
+  end
+
+  def test_xas_proxy_returns_503_when_disabled
+    response = post_json("/xas/", action: "get_session_data", params: {})
+    assert_equal "503", response.code
+    assert_includes JSON.parse(response.body)["error"], "not enabled"
+  end
+
+  def test_xas_enable_disable_and_clear
+    enable_response = post_json("/api/xas/enable", port: 19_999)
+    assert_equal "200", enable_response.code
+    assert JSON.parse(enable_response.body)["ok"]
+
+    status = get_json("/api/xas/status")
+    assert_equal true, status["enabled"]
+    assert_equal 19_999, status["target_port"]
+
+    post_json("/api/xas/disable", {})
+    status = get_json("/api/xas/status")
+    assert_equal false, status["enabled"]
+  end
+
+  def test_xas_enable_without_port_falls_back_to_docker_env
+    env_dir = File.join(@root, "project_docker", ".docker")
+    FileUtils.mkdir_p(env_dir)
+    File.write(File.join(env_dir, ".env"), "APP_PORT=9090\n")
+    @mpr2 = File.join(@root, "project_docker", "app.mpr")
+    File.write(@mpr2, "")
+    write_json("mendix-project.json",
+      "element_count" => 1,
+      "imported_at" => "2026-07-28T00:00:00Z",
+      "source_project" => @mpr2)
+
+    enable_response = post_json("/api/xas/enable", {})
+    assert_equal "200", enable_response.code
+    body = JSON.parse(enable_response.body)
+    assert body["ok"]
+    assert_includes body["message"], "9090"
+  ensure
+    write_json("mendix-project.json",
+      "element_count" => 1,
+      "imported_at" => "2026-07-24T00:00:00Z",
+      "source_project" => @mpr)
+    post_json("/api/xas/disable", {})
+  end
+
+  def test_xas_proxy_forwards_and_logs
+    with_fake_mendix_runtime do |runtime_port, recorded_requests|
+      post_json("/api/xas/enable", port: runtime_port)
+
+      xas_response = post_json(
+        "/xas/",
+        action: "retrieve_by_xpath",
+        params: { xpath: "//Module.Customer", options: { offset: 0, amount: 20 } }
+      )
+
+      assert_equal "200", xas_response.code
+      response_body = JSON.parse(xas_response.body)
+      assert_equal "ok", response_body["status"]
+
+      assert_equal 1, recorded_requests.size
+      assert_equal "retrieve_by_xpath", JSON.parse(recorded_requests.first)["action"]
+
+      log = get_json("/api/xas/log")
+      assert_equal 1, log["total"]
+      entry = log["entries"].first
+      assert_equal "retrieve_by_xpath", entry["action"]
+      assert_equal 200, entry["status"]
+      assert_equal "ok", entry.dig("response", "status")
+    end
+  ensure
+    post_json("/api/xas/disable", {})
+  end
+
+  def test_xas_log_filtering_and_clear
+    with_fake_mendix_runtime do |runtime_port, _|
+      post_json("/api/xas/enable", port: runtime_port)
+
+      post_json("/xas/", action: "login",  params: {})
+      post_json("/xas/", action: "commit", params: {})
+      post_json("/xas/", action: "login",  params: {})
+
+      all = get_json("/api/xas/log")
+      assert_equal 3, all["total"]
+
+      filtered = get_json("/api/xas/log?action=login")
+      assert_equal 2, filtered["entries"].size
+      assert filtered["entries"].all? { |e| e["action"] == "login" }
+
+      limited = get_json("/api/xas/log?limit=1")
+      assert_equal 1, limited["entries"].size
+
+      post_json("/api/xas/clear", {})
+      assert_equal 0, get_json("/api/xas/log")["total"]
+    end
+  ensure
+    post_json("/api/xas/disable", {})
+  end
+
+  def test_xas_proxy_returns_502_when_runtime_unreachable
+    post_json("/api/xas/enable", port: 1)   # porta 1 sempre recusa
+    response = post_json("/xas/", action: "login", params: {})
+    assert_equal "502", response.code
+    assert_includes JSON.parse(response.body)["error"], "not reachable"
+  ensure
+    post_json("/api/xas/disable", {})
+  end
+
   private
 
   def write_json(relative, value)
@@ -293,5 +406,38 @@ class BackendServerTest < Minitest::Test
       sleep 0.01
     end
     flunk "backend server did not start"
+  end
+
+  # Spins up a minimal WEBrick server that acts as a fake Mendix runtime.
+  # Responds to POST /xas/ with {"status":"ok"} and records every raw request
+  # body in the `recorded` array. Yields [port, recorded] to the block and
+  # shuts down cleanly afterward.
+  def with_fake_mendix_runtime
+    require "webrick"
+    recorded = []
+    fake = WEBrick::HTTPServer.new(
+      BindAddress: "127.0.0.1",
+      Port: 0,
+      Logger: WEBrick::Log.new(File::NULL),
+      AccessLog: []
+    )
+    fake.mount_proc("/xas/") do |request, response|
+      recorded << request.body.to_s
+      response.status = 200
+      response["content-type"] = "application/json"
+      response.body = JSON.generate({ status: "ok" })
+    end
+    thread = Thread.new { fake.start }
+    port = fake.listeners.first.addr[1]
+    50.times do
+      TCPSocket.new("127.0.0.1", port).close
+      break
+    rescue Errno::ECONNREFUSED
+      sleep 0.01
+    end
+    yield port, recorded
+  ensure
+    fake&.shutdown
+    thread&.join(2)
   end
 end
