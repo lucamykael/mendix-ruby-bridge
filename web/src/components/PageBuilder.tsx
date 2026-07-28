@@ -158,6 +158,7 @@ export default function PageBuilder({ selection, detail, onSelect, onWidgetSelec
   const [selectedId, setSelectedId] = useState<string>();
   const [hint, setHint] = useState<string>(); // "parentId:index" of the active drop slot
   const [mode, setMode] = useState<"structure" | "design">("structure");
+  const [activeTabMap, setActiveTabMap] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; message: string }>();
 
@@ -267,6 +268,53 @@ export default function PageBuilder({ selection, detail, onSelect, onWidgetSelec
     const selected = node.id === selectedId;
     const dir = t === "row" ? "row" : "column";
     const p = widgetProps(node);
+    const isDesign = mode === "design";
+
+    // Column flex-grow proportional to DesktopWidth (1–12 grid, like Studio Pro).
+    const desktopWidth = t === "column"
+      ? parseInt(node.props?.match(/\bDesktopWidth:\s*(\d+)/i)?.[1] ?? "1", 10)
+      : undefined;
+
+    // Design mode: tabcontainer renders with clickable tab headers, only active tab shown.
+    if (t === "tabcontainer" && isDesign) {
+      const tabs = node.children ?? [];
+      const activeIdx = Math.min(activeTabMap[node.id] ?? 0, Math.max(0, tabs.length - 1));
+      const activeTab = tabs[activeIdx];
+      return (
+        <div
+          key={node.id}
+          className={"w-tabcontainer" + (selected ? " selected" : "")}
+          draggable
+          onDragStart={(e) => {
+            e.stopPropagation();
+            e.dataTransfer.setData("application/mrb-move", node.id);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); }}
+        >
+          <div className="w-tab-headers">
+            {tabs.map((tab, i) => {
+              const caption = tab.props?.match(/\bCaption:\s*'([^']*)'/i)?.[1] ?? tab.name ?? `Tab ${i + 1}`;
+              return (
+                <button
+                  key={tab.id}
+                  className={"w-tab-header" + (i === activeIdx ? " active" : "")}
+                  onClick={(e) => { e.stopPropagation(); setActiveTabMap((m) => ({ ...m, [node.id]: i })); }}
+                >
+                  {caption}
+                </button>
+              );
+            })}
+          </div>
+          <div className="w-tab-body">
+            {activeTab && renderNode(activeTab)}
+          </div>
+          {selected && (
+            <button className="w-del" onClick={(e) => { e.stopPropagation(); del(node.id); }}>✕</button>
+          )}
+        </div>
+      );
+    }
 
     const body = container ? (
       <div className="w-box-body" style={{ display: "flex", flexDirection: dir, gap: 8, flex: 1 }}>
@@ -301,7 +349,7 @@ export default function PageBuilder({ selection, detail, onSelect, onWidgetSelec
           ` w-${t}` +
           (selected ? " selected" : "")
         }
-        style={container ? { display: "flex", flexDirection: dir, flex: t === "column" ? 1 : undefined } : undefined}
+        style={container ? { display: "flex", flexDirection: dir, flex: t === "column" ? (desktopWidth ?? 1) : undefined } : undefined}
         draggable
         onDragStart={(e) => {
           e.stopPropagation();

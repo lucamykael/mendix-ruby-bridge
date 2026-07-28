@@ -39,6 +39,7 @@ export default function Canvas({ selection, details, assocs, layouts, onSelect, 
     return (
       <FlowCanvas
         qn={qn}
+        flowType={type}
         mdl={detail.mdl}
         savedPositions={layouts[qn]}
         parameters={detail.parameters as Array<{ name?: string; type?: string }> | undefined}

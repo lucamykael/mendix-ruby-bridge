@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
 require "json"
+require "net/http"
 require "open3"
+require "socket"
 require "tempfile"
 require "time"
+require "timeout"
 require "webrick"
 
 module MendixBridge
@@ -40,6 +43,11 @@ module MendixBridge
       @docker_running = false
       @auth_user = nil
       @run_cmd_override = run_cmd
+      @xas_log = []
+      @xas_mutex = Mutex.new
+      @database_mutex = Mutex.new
+      @xas_proxy_enabled = false
+      @xas_target_port = nil
       validate!
       @server = WEBrick::HTTPServer.new(
         BindAddress: bind,
@@ -86,6 +94,7 @@ module MendixBridge
       end
       @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
       @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
+      @server.mount_proc("/api/alter") { |request, response| alter_route(request, response) }
       @server.mount_proc("/api/flow") { |request, response| flow_route(request, response) }
       @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
       @server.mount_proc("/api/apply") { |request, response| apply_draft_route(request, response) }
@@ -99,6 +108,8 @@ module MendixBridge
       @server.mount_proc("/api/marketplace/install") do |request, response|
         marketplace_install(request, response)
       end
+      @server.mount_proc("/api/xas") { |request, response| xas_control(request, response) }
+      @server.mount_proc("/xas") { |request, response| xas_proxy(request, response) }
       @server.mount(
         "/",
         WEBrick::HTTPServlet::FileHandler,
@@ -327,13 +338,49 @@ module MendixBridge
 
       result =
         case [request.request_method, action]
-        when ["GET", "status"] then workflow.status
-        when ["GET", "branches"] then { "branches" => workflow.branches, "current" => workflow.status["branch"] }
-        when ["GET", "stash"] then { "stash" => workflow.stash_list.lines.map(&:strip).reject(&:empty?) }
-        when ["POST", "fetch"] then workflow.fetch && workflow.status
-        when ["POST", "switch"] then workflow.switch(payload.fetch("branch"), studio_closed: closed)
-        when ["POST", "create"] then workflow.create(payload.fetch("branch"), studio_closed: closed)
-        when ["POST", "commit"] then workflow.commit(payload.fetch("message"), studio_closed: closed)
+        when ["GET",  "status"]       then workflow.status
+        when ["GET",  "branches"]
+          {
+            "branches" => workflow.branches,
+            "current" => workflow.status["branch"],
+            "remotes" => workflow.remote_names
+          }
+        when ["GET",  "tags"]         then { "tags" => workflow.tags }
+        when ["GET",  "worktrees"]    then { "worktrees" => workflow.worktrees, "root" => workflow.root }
+        when ["GET",  "stash"]        then { "stash" => workflow.stash_list.lines.map(&:strip).reject(&:empty?) }
+        when ["GET",  "log"]
+          max = [[(request.query["max"] || "200").to_i, 1].max, 500].min
+          { "commits" => workflow.log(max:) }
+        when ["GET",  "file-status"]  then { "files" => workflow.file_status }
+        when ["POST", "fetch"]        then workflow.fetch && workflow.status
+        when ["POST", "switch"]       then workflow.switch(payload.fetch("branch"), studio_closed: closed)
+        when ["POST", "create"]
+          workflow.create(
+            payload.fetch("branch"),
+            studio_closed: closed,
+            start_point: payload["start_point"],
+            carry_changes: payload["carry_changes"] == true
+          )
+        when ["POST", "command"]
+          workflow.terminal_command(payload.fetch("command"), studio_closed: closed)
+        when ["POST", "commit"]       then workflow.commit(payload.fetch("message"), studio_closed: closed)
+        when ["POST", "commit-staged"] then workflow.commit_staged(payload.fetch("message"), studio_closed: closed)
+        when ["POST", "stage"]        then workflow.stage(payload.fetch("path"))
+        when ["POST", "unstage"]      then workflow.unstage(payload.fetch("path"))
+        when ["POST", "discard"]      then workflow.discard(payload.fetch("path"))
+        when ["POST", "push"]         then workflow.push
+        when ["POST", "remote"]       then workflow.add_remote(payload.fetch("name"), payload.fetch("url"))
+        when ["POST", "pull"]         then workflow.pull(studio_closed: closed)
+        when ["POST", "cherry-pick"]  then workflow.cherry_pick(payload.fetch("sha"), studio_closed: closed)
+        when ["POST", "revert"]       then workflow.revert_commit(payload.fetch("sha"), studio_closed: closed)
+        when ["POST", "reset"]        then workflow.reset_to(payload.fetch("sha"), mode: payload.fetch("mode", "mixed"), studio_closed: closed)
+        when ["POST", "tag"]
+          workflow.create_tag(payload.fetch("name"), sha: payload["sha"], message: payload["message"])
+        when ["POST", "delete-tag"]    then workflow.delete_tag(payload.fetch("name"))
+        when ["POST", "delete-branch"]
+          workflow.delete_branch(payload.fetch("name"), force: payload["force"] == true)
+        when ["POST", "merge"]        then workflow.merge(payload.fetch("branch"), studio_closed: closed)
+        when ["POST", "rebase"]       then workflow.rebase(payload.fetch("branch"), studio_closed: closed)
         when ["POST", "stash"]
           workflow.stash_push(
             studio_closed: closed,
@@ -462,7 +509,7 @@ module MendixBridge
       persist_page_draft(qn, content, mdl, ok, message)
       json(
         response,
-        { ok:, mdl:, message: ok ? "Page MDL validated and draft saved." : message },
+        { ok:, mdl:, message: ok ? "Page changes validated and saved." : message },
         status: ok ? 200 : 422
       )
     rescue KeyError => error
@@ -489,7 +536,7 @@ module MendixBridge
       persist_draft("flow-plans.json", qn, "body" => body, "mdl" => mdl, "valid" => ok, "message" => message)
       json(
         response,
-        { ok:, mdl:, message: ok ? "Flow MDL validated and draft saved." : message },
+        { ok:, mdl:, message: ok ? "Flow changes validated and saved." : message },
         status: ok ? 200 : 422
       )
     rescue KeyError => error
@@ -521,8 +568,9 @@ module MendixBridge
         response,
         {
           entities: read.call("visual-plans.json"),
-          pages: read.call("page-plans.json"),
-          flows: read.call("flow-plans.json")
+          pages:    read.call("page-plans.json"),
+          flows:    read.call("flow-plans.json"),
+          alters:   read.call("alter-plans.json")
         }
       )
     end
@@ -760,6 +808,14 @@ module MendixBridge
               status: 422
             )
           end
+          startup_error = ensure_local_database_available(project)
+          if startup_error
+            return json(
+              response,
+              { ok: false, message: startup_error },
+              status: 503
+            )
+          end
           [@mxcli, "sql", "-p", project, "--json", "--dsn", dsn, query]
         end
 
@@ -802,6 +858,78 @@ module MendixBridge
 
       require "cgi"
       "postgres://#{CGI.escape(user)}:#{CGI.escape(pass)}@#{host}:#{port}/#{name}?sslmode=disable"
+    end
+
+    # SQL does not require the Mendix runtime. For a project-local database,
+    # start only its PostgreSQL Compose service on demand and keep it running
+    # between queries. External databases are contacted directly.
+    def ensure_local_database_available(project)
+      env_path = docker_env_path
+      return "No database connection configured." unless env_path
+
+      env = parse_env_file(env_path)
+      return nil if env["DB_MODE"].to_s == "external"
+
+      port = env.fetch("DB_PORT", "5432").to_i
+      return "Invalid local database port." unless port.positive?
+      docker_dir = File.dirname(env_path)
+      compose_path = File.join(docker_dir, "docker-compose.yml")
+      return "Local database definition is missing: #{compose_path}" unless File.file?(compose_path)
+      return nil if postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+
+      @database_mutex.synchronize do
+        return nil if postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+
+        output, error, status = Open3.capture3(
+          "docker", "compose",
+          "--env-file", env_path,
+          "-f", compose_path,
+          "up", "-d", "db",
+          chdir: docker_dir
+        )
+        unless status.success?
+          detail = clean_mxcli_error(error.empty? ? output : error)
+          return "Could not start the local PostgreSQL service: #{detail}"
+        end
+
+        begin
+          Timeout.timeout(30) do
+            sleep 0.25 until postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+          end
+        rescue Timeout::Error
+          return "PostgreSQL was started but did not become ready on localhost:#{port} within 30 seconds."
+        end
+      end
+      nil
+    rescue Errno::ENOENT
+      "Docker is required to start the project-local PostgreSQL service."
+    rescue StandardError => error
+      "Could not prepare the local database: #{error.message}"
+    end
+
+    def tcp_reachable?(host, port)
+      Socket.tcp(host, port, connect_timeout: 0.25) { |socket| socket.close }
+      true
+    rescue SystemCallError, IOError
+      false
+    end
+
+    def postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+      return false unless tcp_reachable?("127.0.0.1", env.fetch("DB_PORT", "5432").to_i)
+
+      _output, _error, status = Open3.capture3(
+        "docker", "compose",
+        "--env-file", env_path,
+        "-f", compose_path,
+        "exec", "-T", "db",
+        "pg_isready",
+        "-U", env.fetch("DB_USER", "mendix"),
+        "-d", env.fetch("DB_NAME", "mendix"),
+        chdir: docker_dir
+      )
+      status.success?
+    rescue Errno::ENOENT
+      false
     end
 
     def parse_query_rows(stdout)
@@ -901,6 +1029,95 @@ module MendixBridge
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
     rescue JSON::ParserError
       json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # ---- ALTER PAGE / ALTER SNIPPET --------------------------------------
+    #
+    # GET  /api/alter?qn=Module.Page  — widget tree + names for the page
+    # POST /api/alter                 — apply operations, check & save draft
+    #
+    # POST body:
+    #   { "qn": "Module.Page",
+    #     "operations": [
+    #       { "op": "set", "widget": "btnSave",
+    #         "props": { "Caption": "Save & Close", "ButtonStyle": "Success" } },
+    #       { "op": "insert_after", "widget": "tbEmail",
+    #         "body": "textbox tbPhone (Label: 'Phone', Attribute: Phone)" },
+    #       { "op": "drop", "widgets": ["tbUnused"] },
+    #       { "op": "replace", "widget": "tbName",
+    #         "body": "textarea taName (Label: 'Name', Attribute: Name)" },
+    #       { "op": "set_layout", "layout": "Atlas_Core.Atlas_Sidebar_Full" },
+    #       { "op": "add_variable", "name": "counter",
+    #         "type": "Integer", "default": "0" },
+    #       { "op": "drop_variable", "name": "legacyVar" }
+    #     ]
+    #   }
+
+    def alter_route(request, response)
+      case request.request_method
+      when "GET"  then alter_info(request, response)
+      when "POST" then alter_apply(request, response)
+      else json(response, { error: "method not allowed" }, status: 405)
+      end
+    end
+
+    def alter_info(request, response)
+      qn = request.query["qn"].to_s
+      return json(response, { error: "qn required" }, status: 400) if qn.empty?
+
+      detail = page_detail(qn)
+      return json(response, { error: "unknown page '#{qn}'" }, status: 404) unless detail
+
+      widget_tree  = detail["widget_tree"] || []
+      widget_names = detail["widget_names"] || MdlParser.flat_widget_names(widget_tree)
+
+      json(response, {
+        qn:,
+        widget_tree:,
+        widget_names:,
+        layout: detail["layout"],
+        title: detail["title"]
+      })
+    end
+
+    def alter_apply(request, response)
+      payload    = JSON.parse(request.body.to_s)
+      qn         = payload.fetch("qn").to_s
+      operations = payload.fetch("operations")
+
+      detail = page_detail(qn)
+      return json(response, { error: "unknown page '#{qn}'" }, status: 404) unless detail
+
+      widget_tree  = detail["widget_tree"] || []
+      known_names  = detail["widget_names"] || MdlParser.flat_widget_names(widget_tree)
+
+      # Validate before generating MDL
+      errors = AlterPageBuilder.validate(operations, known_names: known_names)
+      if errors.any?
+        return json(response, { ok: false, errors: }, status: 422)
+      end
+
+      mdl = AlterPageBuilder.build(qn:, operations:, known_names: known_names)
+
+      ok, message = check_mdl(mdl)
+      persist_draft(
+        "alter-plans.json", qn,
+        "operations" => operations,
+        "mdl"        => mdl,
+        "valid"      => ok,
+        "message"    => message
+      )
+      json(
+        response,
+        { ok:, mdl:, message: ok ? "Page changes validated and saved." : message },
+        status: ok ? 200 : 422
+      )
+    rescue KeyError => e
+      json(response, { error: "missing parameter: #{e.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    rescue ArgumentError => e
+      json(response, { ok: false, errors: [e.message] }, status: 422)
     end
 
     # ---- app run/stop/log ------------------------------------------------
@@ -1392,6 +1609,141 @@ module MendixBridge
         content = File.read(override_path)
         File.delete(override_path) if content.include?("Generated by Mendix Ruby Bridge")
       end
+    end
+
+    # ---- XAS proxy / interceptor -----------------------------------------
+    #
+    # When enabled, the bridge sits between the browser and the Mendix runtime,
+    # logging every /xas/ call so you can inspect actions, operationIds, and
+    # the data the client reads or writes. The runtime stays unmodified — all
+    # requests are forwarded transparently and the original response is returned
+    # verbatim. Enable with POST /api/xas/enable; browser/Studio Pro must then
+    # point at the bridge port instead of the Mendix runtime port.
+
+    def xas_proxy(request, response)
+      target_port = mendix_runtime_port
+      unless @xas_proxy_enabled && target_port
+        return json(
+          response,
+          { error: "XAS proxy not enabled — POST /api/xas/enable first" },
+          status: 503
+        )
+      end
+
+      body = request.body.to_s
+      payload = body.empty? ? {} : JSON.parse(body)
+      action       = payload["action"].to_s
+      operation_id = payload.dig("params", "operationId").to_s
+
+      uri = URI("http://127.0.0.1:#{target_port}/xas/")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 30
+
+      proxy_req = Net::HTTP::Post.new(uri.path)
+      %w[cookie x-csrf-token content-type].each do |h|
+        proxy_req[h] = request[h] if request[h]
+      end
+      proxy_req.body = body
+
+      proxy_res  = http.request(proxy_req)
+      res_body   = proxy_res.body.to_s
+      res_status = proxy_res.code.to_i
+
+      entry = {
+        "at"            => Time.now.iso8601,
+        "action"        => action,
+        "operation_id"  => operation_id.empty? ? nil : operation_id,
+        "params"        => payload["params"],
+        "status"        => res_status,
+        "response_size" => res_body.bytesize
+      }
+      if res_body.bytesize < 16_384
+        begin
+          entry["response"] = JSON.parse(res_body)
+        rescue JSON::ParserError
+          nil
+        end
+      end
+
+      @xas_mutex.synchronize do
+        @xas_log << entry
+        @xas_log = @xas_log.last(500)
+      end
+
+      response.status = res_status
+      response["content-type"] = proxy_res["content-type"] || "application/json"
+      response["cache-control"] = "no-store"
+      response.body = res_body
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON in request body" }, status: 400)
+    rescue Errno::ECONNREFUSED
+      json(response, { error: "Mendix runtime not reachable on port #{target_port}" }, status: 502)
+    rescue Net::ReadTimeout
+      json(response, { error: "Mendix runtime timed out" }, status: 504)
+    end
+
+    # GET  /api/xas/log     — query the intercepted call log
+    # GET  /api/xas/status  — proxy enabled state + log size
+    # POST /api/xas/enable  — start proxying (optional body: {"port": 8080})
+    # POST /api/xas/disable — stop proxying
+    # POST /api/xas/clear   — wipe the log
+    def xas_control(request, response)
+      action = request.path.delete_prefix("/api/xas").sub(%r{\A/}, "")
+
+      case [request.request_method, action]
+      when ["GET", "log"]
+        limit = request.query["limit"].to_s.empty? ? 50 : [[request.query["limit"].to_i, 1].max, 500].min
+        entries = @xas_mutex.synchronize { @xas_log.dup }
+        entries = entries.select { |e| e["action"] == request.query["action"] } if request.query["action"].to_s != ""
+        entries = entries.select { |e| e["at"] >= request.query["since"] }      if request.query["since"].to_s != ""
+        json(response, { entries: entries.last(limit), total: @xas_log.size })
+
+      when ["GET", "status"]
+        json(response, {
+          enabled:     @xas_proxy_enabled,
+          target_port: @xas_target_port || mendix_runtime_port,
+          log_size:    @xas_mutex.synchronize { @xas_log.size }
+        })
+
+      when ["POST", "enable"]
+        payload = request.body.to_s.empty? ? {} : JSON.parse(request.body.to_s)
+        port = payload["port"]&.to_i.then { |p| p&.positive? ? p : nil } || mendix_runtime_port
+        unless port
+          return json(
+            response,
+            { ok: false, message: "Cannot determine Mendix runtime port. Pass {\"port\": 8080} or set APP_PORT in .docker/.env." },
+            status: 422
+          )
+        end
+        @xas_target_port   = port
+        @xas_proxy_enabled = true
+        json(response, { ok: true, message: "XAS proxy enabled → port #{port}. Point your browser at http://localhost:#{@port} instead of :#{port}." })
+
+      when ["POST", "disable"]
+        @xas_proxy_enabled = false
+        json(response, { ok: true, message: "XAS proxy disabled." })
+
+      when ["POST", "clear"]
+        @xas_mutex.synchronize { @xas_log.clear }
+        json(response, { ok: true, message: "XAS log cleared." })
+
+      else
+        json(response, { error: "not found" }, status: 404)
+      end
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # Resolves the Mendix runtime port: explicit override > .docker/.env APP_PORT > 8080.
+    def mendix_runtime_port
+      return @xas_target_port if @xas_target_port
+
+      path = docker_env_path
+      return 8080 unless path
+
+      env  = parse_env_file(path)
+      port = env["APP_PORT"].to_i
+      port.positive? ? port : 8080
     end
 
     def json(response, payload, status: 200)

@@ -4,13 +4,13 @@ import Canvas from "./components/Canvas";
 import Detail from "./components/Detail";
 import GitPanel from "./components/GitPanel";
 import ERDiagram from "./components/ERDiagram";
-import Drafts from "./components/Drafts";
 import RightPanel from "./components/RightPanel";
 import type { EditableNode } from "./components/PageBuilder";
 import AppTerminal, { type TerminalMode } from "./components/AppTerminal";
 import LoginModal from "./components/LoginModal";
 import SettingsModal from "./components/SettingsModal";
 import NewElementModal from "./components/NewElementModal";
+import StudioDocumentDialog from "./components/StudioDocumentDialog";
 import QueryPanel from "./components/QueryPanel";
 import type { FlowAction } from "./components/Toolbox";
 import { loadHealth, loadInventory } from "./model/data";
@@ -20,7 +20,7 @@ import type { BackendHealth, Inventory, TreeNode } from "./model/types";
 import "./themes.css";
 import "./App.css";
 
-type View = "explorer" | "git" | "er" | "drafts";
+type View = "explorer" | "git" | "er";
 type BottomTab = "details" | "changes" | "errors" | "console" | "oql" | "find" | "variables" | "debugger" | "breakpoints";
 
 function ChangesPane() {
@@ -124,10 +124,67 @@ function toggleThemeMode(theme: string) {
   return isDark(theme) ? theme + LIGHT_SUFFIX : theme.replace(LIGHT_SUFFIX, "");
 }
 
-function orderModules(tree: TreeNode[]): TreeNode[] {
-  const rest = tree.filter((n) => !(n.type === "module" && n.label === "System"));
-  const system = tree.filter((n) => n.type === "module" && n.label === "System");
-  return [...rest, ...system];
+const MARKETPLACE_MODULES = new Set([
+  "Administration",
+  "Atlas_Core",
+  "Atlas_Web_Content",
+  "DataWidgets",
+  "FeedbackModule",
+  "NanoflowCommons",
+  "WebActions",
+]);
+
+function appName(sourceProject?: string): string {
+  const file = sourceProject?.split(/[\\/]/).pop() ?? "App";
+  return file.replace(/\.mpr$/i, "") || "App";
+}
+
+function buildAppExplorer(tree: TreeNode[], sourceProject?: string): TreeNode[] {
+  const appDocuments = tree.filter((node) => node.type !== "module").map((node) =>
+    node.type === "projectsecurity" ? { ...node, label: "Security" } : node);
+  if (!appDocuments.some((node) => node.type === "styling"))
+    appDocuments.push({ label: "Styling", type: "styling", qualifiedName: "Styling" });
+  const appOrder: Record<string, number> = {
+    settings: 0, projectsecurity: 1, navigation: 2, styling: 3, systemoverview: 4,
+  };
+  appDocuments.sort((left, right) =>
+    (appOrder[left.type] ?? 99) - (appOrder[right.type] ?? 99));
+  const modules = tree.filter((node) => node.type === "module").map((module) => {
+    const children = (module.children ?? []).map((child) =>
+      child.type === "security" && !child.qualifiedName
+        ? { ...child, qualifiedName: `${module.label}.Security` }
+        : child,
+    );
+    if (!children.some((child) => child.type === "modulesettings"))
+      children.unshift({ label: "Settings", type: "modulesettings", qualifiedName: `${module.label}.Settings` });
+    return { ...module, children };
+  });
+  const system = modules.filter((node) => node.label === "System");
+  const marketplace = modules.filter((node) => MARKETPLACE_MODULES.has(node.label));
+  const authored = modules.filter(
+    (node) => node.label !== "System" && !MARKETPLACE_MODULES.has(node.label),
+  );
+
+  return [
+    {
+      label: `App '${appName(sourceProject)}'`,
+      type: "app",
+      qualifiedName: "App",
+      children: [
+        ...appDocuments,
+        ...(marketplace.length
+          ? [{
+              label: "Marketplace modules",
+              type: "marketplacemodules",
+              qualifiedName: "MarketplaceModules",
+              children: marketplace,
+            }]
+          : []),
+      ],
+    },
+    ...authored,
+    ...system,
+  ];
 }
 
 type DraftStatus = Map<string, "valid" | "blocked">;
@@ -155,6 +212,7 @@ export default function App() {
   const [inv, setInv] = useState<Inventory | null>(null);
   const [error, setError] = useState<string>();
   const [health, setHealth] = useState<BackendHealth>();
+  const [footerGitStatus, setFooterGitStatus] = useState<GitStatus>();
   const [sel, setSel] = useState<Selection>();
   // Studio Pro-style document tabs: every opened element stays in a tab
   // until it's explicitly closed; selecting activates or appends its tab.
@@ -193,6 +251,7 @@ export default function App() {
   const handleWidgetChange = useCallback((props: string) => pageWidgetChangeFn.current?.(props), []);
   const [showLogin, setShowLogin] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [studioDialog, setStudioDialog] = useState<Selection>();
   const [newElementKind, setNewElementKind] = useState<string>();
   const [loggedIn, setLoggedIn] = useState(false);
   const [authUser, setAuthUser] = useState<string | null>(null);
@@ -211,6 +270,20 @@ export default function App() {
       .then((d) => { const p = parseInt(d.settings?.APP_PORT ?? ""); if (p > 0) setAppPort(p); })
       .catch(() => null);
   }, []);
+
+  useEffect(() => {
+    if (!health?.capabilities?.git) return;
+    const update = () => git.status().then(setFooterGitStatus).catch(() => null);
+    const onStatus = (event: Event) =>
+      setFooterGitStatus((event as CustomEvent<GitStatus>).detail);
+    update();
+    const timer = window.setInterval(update, 3000);
+    window.addEventListener("mrb:git-status", onStatus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("mrb:git-status", onStatus);
+    };
+  }, [health?.capabilities?.git]);
 
   // Keep appRunning truthful even when the console isn't visible (the
   // terminal's log poller is the primary source, but it only runs while
@@ -233,10 +306,13 @@ export default function App() {
   }, [theme]);
 
   const assocs = useMemo(() => (inv ? collectAssocs(inv.details) : []), [inv]);
-  const tree = useMemo(() => (inv ? orderModules(inv.tree) : []), [inv]);
+  const tree = useMemo(
+    () => (inv ? buildAppExplorer(inv.tree, inv.meta.source_project) : []),
+    [inv],
+  );
   const moduleNames = useMemo(
-    () => tree.filter((n) => n.type === "module").map((n) => n.label),
-    [tree],
+    () => (inv?.tree ?? []).filter((n) => n.type === "module").map((n) => n.label),
+    [inv],
   );
 
   // Callable actions (Java/JS actions + micro/nanoflows) from the inventory,
@@ -341,7 +417,6 @@ export default function App() {
     setView("er");
   };
 
-  const refreshDrafts = () => loadDraftStatus().then(setDraftQns).catch(() => null);
 
   if (error) return (
     <div className="startup-state">
@@ -385,7 +460,6 @@ export default function App() {
         <nav className="tabs">
           <button className={view === "explorer" ? "on" : ""} onClick={() => setView("explorer")}>App Explorer</button>
           <button className={view === "er" ? "on" : ""} onClick={() => setView("er")}>ER Diagram</button>
-          <button className={view === "drafts" ? "on" : ""} onClick={() => { setView("drafts"); refreshDrafts(); }}>Drafts</button>
           {health?.capabilities?.git && (
             <button className={view === "git" ? "on" : ""} onClick={() => setView("git")}>Git</button>
           )}
@@ -502,14 +576,6 @@ export default function App() {
 
       {view === "git" ? (
         <GitPanel />
-      ) : view === "drafts" ? (
-        <Drafts
-          health={health}
-          onOpen={(qn) => {
-            selectByQn(qn);
-            setView("explorer");
-          }}
-        />
       ) : view === "er" ? (
         <ERDiagram
           tree={tree}
@@ -528,7 +594,11 @@ export default function App() {
               tree={tree}
               hasDetail={(qn) => !!inv.details[qn]}
               selected={sel?.qn}
-              onSelect={openDoc}
+              onSelect={(selection) => {
+                if (["settings", "projectsecurity", "navigation", "styling", "modulesettings", "security"].includes(selection.type))
+                  setStudioDialog(selection);
+                else openDoc(selection);
+              }}
               details={inv.details}
               draftQns={draftQns}
               onOpenDomainModel={openDomainModel}
@@ -645,6 +715,14 @@ export default function App() {
       )}
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {studioDialog && inv && (
+        <StudioDocumentDialog
+          selection={studioDialog}
+          details={inv.details}
+          tree={inv.tree}
+          onClose={() => setStudioDialog(undefined)}
+        />
+      )}
       {newElementKind && (
         <NewElementModal
           initialKind={newElementKind}
@@ -662,6 +740,11 @@ export default function App() {
       <footer className="statusbar">
         <img className="status-logo" src="/favicon.png" alt="" />
         <span>{health ? `Backend v${health.version}` : "Backend unavailable"}</span>
+        {footerGitStatus && (
+          <button className="status-branch" title="Open Git Repository"
+            onClick={() => setView("git")}>⎇ {footerGitStatus.branch || "detached HEAD"}
+            {!footerGitStatus.clean && <span>●</span>}</button>
+        )}
         <span className="spacer" />
         {sel && <span>{sel.type} · {sel.qn}</span>}
         <span className="sb-meta">{meta.element_count ? `${meta.element_count} elements` : ""}</span>
