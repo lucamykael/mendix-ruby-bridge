@@ -91,6 +91,7 @@ module MendixBridge
       end
       @server.mount_proc("/api/git") { |request, response| git_route(request, response) }
       @server.mount_proc("/api/page") { |request, response| page_route(request, response) }
+      @server.mount_proc("/api/alter") { |request, response| alter_route(request, response) }
       @server.mount_proc("/api/flow") { |request, response| flow_route(request, response) }
       @server.mount_proc("/api/drafts") { |_request, response| drafts(response) }
       @server.mount_proc("/api/apply") { |request, response| apply_draft_route(request, response) }
@@ -528,8 +529,9 @@ module MendixBridge
         response,
         {
           entities: read.call("visual-plans.json"),
-          pages: read.call("page-plans.json"),
-          flows: read.call("flow-plans.json")
+          pages:    read.call("page-plans.json"),
+          flows:    read.call("flow-plans.json"),
+          alters:   read.call("alter-plans.json")
         }
       )
     end
@@ -908,6 +910,95 @@ module MendixBridge
       json(response, { error: "missing parameter: #{error.key}" }, status: 400)
     rescue JSON::ParserError
       json(response, { error: "invalid JSON payload" }, status: 400)
+    end
+
+    # ---- ALTER PAGE / ALTER SNIPPET --------------------------------------
+    #
+    # GET  /api/alter?qn=Module.Page  — widget tree + names for the page
+    # POST /api/alter                 — apply operations, check & save draft
+    #
+    # POST body:
+    #   { "qn": "Module.Page",
+    #     "operations": [
+    #       { "op": "set", "widget": "btnSave",
+    #         "props": { "Caption": "Save & Close", "ButtonStyle": "Success" } },
+    #       { "op": "insert_after", "widget": "tbEmail",
+    #         "body": "textbox tbPhone (Label: 'Phone', Attribute: Phone)" },
+    #       { "op": "drop", "widgets": ["tbUnused"] },
+    #       { "op": "replace", "widget": "tbName",
+    #         "body": "textarea taName (Label: 'Name', Attribute: Name)" },
+    #       { "op": "set_layout", "layout": "Atlas_Core.Atlas_Sidebar_Full" },
+    #       { "op": "add_variable", "name": "counter",
+    #         "type": "Integer", "default": "0" },
+    #       { "op": "drop_variable", "name": "legacyVar" }
+    #     ]
+    #   }
+
+    def alter_route(request, response)
+      case request.request_method
+      when "GET"  then alter_info(request, response)
+      when "POST" then alter_apply(request, response)
+      else json(response, { error: "method not allowed" }, status: 405)
+      end
+    end
+
+    def alter_info(request, response)
+      qn = request.query["qn"].to_s
+      return json(response, { error: "qn required" }, status: 400) if qn.empty?
+
+      detail = page_detail(qn)
+      return json(response, { error: "unknown page '#{qn}'" }, status: 404) unless detail
+
+      widget_tree  = detail["widget_tree"] || []
+      widget_names = detail["widget_names"] || MdlParser.flat_widget_names(widget_tree)
+
+      json(response, {
+        qn:,
+        widget_tree:,
+        widget_names:,
+        layout: detail["layout"],
+        title: detail["title"]
+      })
+    end
+
+    def alter_apply(request, response)
+      payload    = JSON.parse(request.body.to_s)
+      qn         = payload.fetch("qn").to_s
+      operations = payload.fetch("operations")
+
+      detail = page_detail(qn)
+      return json(response, { error: "unknown page '#{qn}'" }, status: 404) unless detail
+
+      widget_tree  = detail["widget_tree"] || []
+      known_names  = detail["widget_names"] || MdlParser.flat_widget_names(widget_tree)
+
+      # Validate before generating MDL
+      errors = AlterPageBuilder.validate(operations, known_names: known_names)
+      if errors.any?
+        return json(response, { ok: false, errors: }, status: 422)
+      end
+
+      mdl = AlterPageBuilder.build(qn:, operations:, known_names: known_names)
+
+      ok, message = check_mdl(mdl)
+      persist_draft(
+        "alter-plans.json", qn,
+        "operations" => operations,
+        "mdl"        => mdl,
+        "valid"      => ok,
+        "message"    => message
+      )
+      json(
+        response,
+        { ok:, mdl:, message: ok ? "ALTER PAGE validated and draft saved." : message },
+        status: ok ? 200 : 422
+      )
+    rescue KeyError => e
+      json(response, { error: "missing parameter: #{e.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON payload" }, status: 400)
+    rescue ArgumentError => e
+      json(response, { ok: false, errors: [e.message] }, status: 422)
     end
 
     # ---- app run/stop/log ------------------------------------------------

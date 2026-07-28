@@ -11,27 +11,40 @@ module MendixBridge
         return { "mdl" => mdl, "parse_status" => "unsupported" } unless header
 
         settings = header[:settings]
-        actions = mdl.scan(/\bAction:\s*([^,\n\)]+)/i).flatten.map(&:strip)
+        actions      = mdl.scan(/\bAction:\s*([^,\n\)]+)/i).flatten.map(&:strip)
         data_sources = mdl.scan(/\bDataSource:\s*([^,\n\)]+)/i).flatten.map(&:strip)
 
+        # Build the hierarchical widget tree using the dedicated parser.
+        widget_tree  = MdlParser.parse_page_widgets(mdl)
+        all_widgets  = MdlParser.flat_widgets(widget_tree)
+        widget_names = MdlParser.flat_widget_names(widget_tree)
+
+        # Backward-compatible flat widget list (kept for existing consumers).
+        flat_list = all_widgets.map do |node|
+          entry = { "type" => node["type"], "name" => node["name"] }
+          entry.compact
+        end
+
         {
-          "title" => quoted_setting(settings, "Title"),
-          "layout" => scalar_setting(settings, "Layout"),
-          "folder" => quoted_setting(settings, "Folder"),
-          "parameters" => parse_parameters(settings),
-          "widgets" => parse_widgets(mdl),
-          "widget_types" => widget_counts(mdl),
-          "data_sources" => data_sources.uniq,
-          "actions" => actions.map { |action| parse_action(action) },
+          "title"           => quoted_setting(settings, "Title"),
+          "layout"          => scalar_setting(settings, "Layout"),
+          "folder"          => quoted_setting(settings, "Folder"),
+          "parameters"      => parse_parameters(settings),
+          "widget_tree"     => widget_tree,
+          "widgets"         => flat_list,
+          "widget_names"    => widget_names,
+          "widget_types"    => widget_counts(all_widgets),
+          "data_sources"    => data_sources.uniq,
+          "actions"         => actions.map { |a| parse_action(a) },
           "microflow_calls" => referenced(actions, "microflow"),
-          "nanoflow_calls" => referenced(actions, "nanoflow"),
-          "page_links" => referenced(actions, "show_page"),
-          "attributes" => mdl.scan(/\bAttribute:\s*([^,\n\)]+)/i).flatten.map(&:strip).uniq,
-          "view_roles" => mdl.scan(
+          "nanoflow_calls"  => referenced(actions, "nanoflow"),
+          "page_links"      => referenced(actions, "show_page"),
+          "attributes"      => mdl.scan(/\bAttribute:\s*([^,\n\)]+)/i).flatten.map(&:strip).uniq,
+          "view_roles"      => mdl.scan(
             /^grant\s+view\s+on\s+page\s+[\w.]+\s+to\s+([\w.]+)/i
           ).flatten,
-          "mdl" => mdl,
-          "parse_status" => "parsed"
+          "mdl"             => mdl,
+          "parse_status"    => "parsed"
         }.compact
       end
 
@@ -54,28 +67,9 @@ module MendixBridge
         end
       end
 
-      def parse_widgets(mdl)
-        mdl.lines.filter_map do |line|
-          stripped = line.strip
-          next if stripped.start_with?("--")
-
-          match = stripped.match(
-            /\A(?<type>[a-z][a-z0-9_]*)\s*(?<name>"[^"]+"|[A-Za-z_]\w*)?\s*(?<opening>\(|\{)/
-          )
-          next unless match
-          next if %w[create grant].include?(match[:type])
-
-          {
-            "type" => match[:type],
-            "name" => match[:name]&.delete_prefix('"')&.delete_suffix('"'),
-            "declaration" => stripped
-          }.compact
-        end
-      end
-
-      def widget_counts(mdl)
-        parse_widgets(mdl).each_with_object(Hash.new(0)) do |widget, counts|
-          counts[widget["type"]] += 1
+      def widget_counts(all_widgets)
+        all_widgets.each_with_object(Hash.new(0)) do |node, counts|
+          counts[node["type"]] += 1
         end.sort.to_h
       end
 

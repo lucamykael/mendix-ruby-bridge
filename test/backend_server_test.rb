@@ -46,7 +46,54 @@ class BackendServerTest < Minitest::Test
         "title" => "Home",
         "layout" => "Atlas_Core.Default",
         "parameters" => [],
+        "widget_tree" => [],
+        "widget_names" => [],
         "mdl" => "create or modify page Module.Home (Title: 'Home') {}"
+      },
+      "Module.EditCustomer" => {
+        "parse_status" => "parsed",
+        "title" => "Edit Customer",
+        "layout" => "Atlas_Core.Default",
+        "parameters" => [{ "name" => "Customer", "type" => "Module.Customer" }],
+        "widget_names" => %w[dv1 tbName tbEmail ftr1 btnSave btnCancel],
+        "widget_tree" => [
+          {
+            "type" => "dataview", "name" => "dv1",
+            "properties" => { "DataSource" => "$Customer" },
+            "children" => [
+              { "type" => "textbox", "name" => "tbName",
+                "properties" => { "Label" => "Name", "Attribute" => "Name" }, "children" => [] },
+              { "type" => "textbox", "name" => "tbEmail",
+                "properties" => { "Label" => "Email", "Attribute" => "Email" }, "children" => [] },
+              { "type" => "footer", "name" => "ftr1", "properties" => {},
+                "children" => [
+                  { "type" => "actionbutton", "name" => "btnSave",
+                    "properties" => { "Caption" => "Save", "Action" => "save_changes", "ButtonStyle" => "Success" },
+                    "children" => [] },
+                  { "type" => "actionbutton", "name" => "btnCancel",
+                    "properties" => { "Caption" => "Cancel", "Action" => "cancel_changes", "ButtonStyle" => "Default" },
+                    "children" => [] }
+                ]
+              }
+            ]
+          }
+        ],
+        "mdl" => <<~MDL
+          create or modify page Module.EditCustomer (
+            Title: 'Edit Customer',
+            Layout: Atlas_Core.Default,
+            Params: { $Customer: Module.Customer }
+          ) {
+            dataview dv1 (DataSource: $Customer) {
+              textbox tbName  (Label: 'Name',  Attribute: Name)
+              textbox tbEmail (Label: 'Email', Attribute: Email)
+              footer ftr1 () {
+                actionbutton btnSave   (Caption: 'Save',   Action: save_changes,   ButtonStyle: Success)
+                actionbutton btnCancel (Caption: 'Cancel', Action: cancel_changes, ButtonStyle: Default)
+              }
+            }
+          }
+        MDL
       },
       "Module.ACT_Save" => {
         "parse_status" => "parsed",
@@ -259,6 +306,166 @@ class BackendServerTest < Minitest::Test
 
     response = post_json("/api/apply", qn: "Module.Home", type: "page", studio_closed: true)
     assert_equal "404", response.code
+  end
+
+  # ---------------------------------------------------------------------------
+  # /api/alter — ALTER PAGE route
+  # ---------------------------------------------------------------------------
+
+  def test_alter_info_returns_widget_tree_for_known_page
+    response = Net::HTTP.get_response(uri("/api/alter?qn=Module.EditCustomer"))
+    assert_equal "200", response.code
+    body = JSON.parse(response.body)
+    assert_equal "Module.EditCustomer", body["qn"]
+    assert_includes body["widget_names"], "btnSave"
+    assert_includes body["widget_names"], "dv1"
+    assert body["widget_tree"].is_a?(Array)
+  end
+
+  def test_alter_info_returns_404_for_unknown_page
+    response = Net::HTTP.get_response(uri("/api/alter?qn=Module.Ghost"))
+    assert_equal "404", response.code
+  end
+
+  def test_alter_info_requires_qn
+    response = Net::HTTP.get_response(uri("/api/alter"))
+    assert_equal "400", response.code
+  end
+
+  def test_alter_apply_validates_mdl_and_saves_draft
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "set", widget: "btnSave",
+          props: { "Caption" => "Save & Close", "ButtonStyle" => "Success" } }
+      ]
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code, body.inspect
+    assert body["ok"]
+    assert_includes body["mdl"], "ALTER PAGE Module.EditCustomer"
+    assert_includes body["mdl"], "SET (Caption: 'Save & Close', ButtonStyle: Success) ON btnSave"
+
+    drafts = get_json("/api/drafts")
+    assert drafts.key?("alters")
+    assert_includes drafts["alters"].keys, "Module.EditCustomer"
+    assert_equal true, drafts.dig("alters", "Module.EditCustomer", "valid")
+  end
+
+  def test_alter_apply_rejects_unknown_widget
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "set", widget: "ghostWidget",
+          props: { "Caption" => "X" } }
+      ]
+    )
+    assert_equal "422", response.code
+    body = JSON.parse(response.body)
+    refute body["ok"]
+    assert body["errors"].any? { |e| e.include?("ghostWidget") }
+  end
+
+  def test_alter_apply_drop_widget
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "drop", widgets: ["btnCancel"] }
+      ]
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code, body.inspect
+    assert body["ok"]
+    assert_includes body["mdl"], "DROP WIDGET btnCancel"
+  end
+
+  def test_alter_apply_insert_after
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "insert_after", widget: "tbEmail",
+          body: "textbox tbPhone (Label: 'Phone', Attribute: Phone)" }
+      ]
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code, body.inspect
+    assert body["ok"]
+    assert_includes body["mdl"], "INSERT AFTER tbEmail"
+    assert_includes body["mdl"], "tbPhone"
+  end
+
+  def test_alter_apply_replace_widget
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "replace", widget: "tbName",
+          body: "textarea taName (Label: 'Name', Attribute: Name, NumberOfLines: 3)" }
+      ]
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code, body.inspect
+    assert body["ok"]
+    assert_includes body["mdl"], "REPLACE tbName WITH"
+    assert_includes body["mdl"], "textarea taName"
+  end
+
+  def test_alter_apply_set_layout
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "set_layout", layout: "Atlas_Core.Atlas_Sidebar_Full" }
+      ]
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code, body.inspect
+    assert body["ok"]
+    assert_includes body["mdl"], "SET Layout Atlas_Core.Atlas_Sidebar_Full"
+  end
+
+  def test_alter_apply_multiple_operations
+    response = post_json(
+      "/api/alter",
+      qn: "Module.EditCustomer",
+      operations: [
+        { op: "set",  widget: "btnSave", props: { "Caption" => "OK" } },
+        { op: "drop", widgets: ["btnCancel"] },
+        { op: "insert_after", widget: "tbEmail",
+          body: "datepicker dpCreated (Label: 'Created', Attribute: CreatedDate)" }
+      ]
+    )
+    body = JSON.parse(response.body)
+    assert_equal "200", response.code, body.inspect
+    assert body["ok"]
+    mdl = body["mdl"]
+    assert_includes mdl, "SET"
+    assert_includes mdl, "DROP"
+    assert_includes mdl, "INSERT"
+  end
+
+  def test_alter_apply_returns_422_for_unknown_page
+    response = post_json(
+      "/api/alter",
+      qn: "Module.GhostPage",
+      operations: [{ op: "drop", widgets: ["x"] }]
+    )
+    assert_equal "404", response.code
+  end
+
+  def test_alter_apply_requires_operations_key
+    response = post_json("/api/alter", qn: "Module.EditCustomer")
+    assert_equal "400", response.code
+    assert_includes JSON.parse(response.body)["error"], "missing parameter"
+  end
+
+  def test_drafts_includes_alters_key
+    drafts = get_json("/api/drafts")
+    assert drafts.key?("alters"), "Expected /api/drafts to include 'alters' key"
   end
 
   def test_xas_status_disabled_by_default
