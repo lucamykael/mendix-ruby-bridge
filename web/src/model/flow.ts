@@ -3,9 +3,9 @@
 // plus the `if / else / end if` control structure. Ported from the verified
 // vanilla implementation in the Ruby-side HTML viewer.
 
-import type { Edge, Node } from "@xyflow/react";
+import { MarkerType, type Edge, type Node } from "@xyflow/react";
 
-export type FlowKind = "terminal" | "decision" | "validation" | "action" | "assign";
+export type FlowKind = string;
 
 interface RawNode {
   id: number;
@@ -45,8 +45,22 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
   const kindOf = (t: string): FlowKind => {
     if (/^return\b/.test(t)) return "terminal";
     if (/^validation\b/.test(t)) return "validation";
-    if (/\bcall\b/.test(t)) return "action";
-    if (/^(declare|set)\b/.test(t)) return "assign";
+    if (/call\s+java\s+action/i.test(t)) return "java";
+    if (/call\s+javascript\s+action/i.test(t)) return "javascript";
+    if (/call\s+microflow/i.test(t)) return "microflow";
+    if (/call\s+nanoflow/i.test(t)) return "nanoflow";
+    if (/^retrieve\b/i.test(t)) return "retrieve";
+    if (/\bcreate\s+list\s+of\b/i.test(t)) return "createList";
+    if (/\bcreate\s+\w+\.\w+/i.test(t)) return "create";
+    if (/^change\b/i.test(t)) return "changeObject";
+    if (/^commit\b/i.test(t)) return "commit";
+    if (/^delete\b/i.test(t)) return "delete";
+    if (/^rollback\b/i.test(t)) return "rollback";
+    if (/^show\s+page\b/i.test(t)) return "showPage";
+    if (/^close\s+page\b/i.test(t)) return "closePage";
+    if (/^log\b/i.test(t)) return "log";
+    if (/^declare\b/i.test(t)) return "createVariable";
+    if (/^set\b/i.test(t)) return "assign";
     return "action";
   };
 
@@ -110,6 +124,8 @@ function parseFlow(mdl: string): { nodes: RawNode[]; edges: RawEdge[] } | null {
 
 const nodeType = (n: RawNode): string => {
   if (n.kind === "decision") return "decision";
+  if (n.kind === "merge")    return "merge";
+  if (n.kind === "loop")     return "loop";
   if (n.kind === "terminal") return n.label === "Start" ? "start" : "end";
   return "activity";
 };
@@ -163,13 +179,26 @@ export function flowGraph(mdl: string): { nodes: Node[]; edges: Edge[] } | null 
     position: { x: ((n.x as number) - minX) * sx, y: ((n.y as number) - minY) * sy },
     data: { label: n.label, kind: n.kind, stmt: n.stmt },
   }));
+  // Decision nodes have named handles: "true" (right) and "false" (bottom).
+  const decisionIds = new Set(g.nodes.filter((n) => n.kind === "decision").map((n) => String(n.id)));
+  const edgeSourceHandle = (e: RawEdge): string | undefined => {
+    if (!decisionIds.has(String(e.from))) return undefined;
+    const lbl = (e.label ?? "").toLowerCase();
+    if (lbl === "false") return "false";
+    if (lbl === "true")  return "true";
+    return undefined;
+  };
+
   const edges: Edge[] = g.edges.map((e, i) => ({
     id: `e${i}`,
+    type: "smoothstep",
     source: String(e.from),
     target: String(e.to),
+    sourceHandle: edgeSourceHandle(e),
     label: e.label ?? undefined,
     animated: false,
     style: { stroke: "var(--edge)" },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "var(--edge)" },
     labelStyle: { fill: "var(--fg)", fontSize: 10 },
     labelBgStyle: { fill: "var(--panel)", stroke: "var(--line)" },
     labelBgPadding: [6, 3] as [number, number],

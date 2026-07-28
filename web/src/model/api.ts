@@ -312,17 +312,64 @@ function gitPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   });
 }
 
+export interface GitRef {
+  name: string;
+  type: "head" | "local" | "remote" | "tag" | "detached";
+}
+
+export interface GitCommit {
+  sha: string;
+  short_sha: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+  refs: GitRef[];
+  parents: string[];
+}
+
+export interface GitFileStatus {
+  path: string;
+  xy: string;
+  index_status: string;
+  worktree_status: string;
+  renamed_from?: string;
+}
+
+export interface GitWorktree {
+  path: string;
+  sha: string;
+  branch?: string;
+  detached?: boolean;
+  prunable?: boolean;
+  locked?: boolean;
+}
+
 export const git = {
   status: () => gitRequest<GitStatus>("/status"),
-  branches: () => gitRequest<{ branches: string[]; current: string }>("/branches"),
+  branches: () => gitRequest<{ branches: string[]; current: string; remotes: string[] }>("/branches"),
+  tags: () => gitRequest<{ tags: string[] }>("/tags"),
+  worktrees: () => gitRequest<{ worktrees: GitWorktree[]; root: string }>("/worktrees"),
   stashList: () => gitRequest<{ stash: string[] }>("/stash"),
   fetch: () => gitPost<GitStatus>("/fetch", {}),
   switch: (branch: string, studioClosed: boolean) =>
     gitPost<GitStatus>("/switch", { branch, studio_closed: studioClosed }),
-  create: (branch: string, studioClosed: boolean) =>
-    gitPost<GitStatus>("/create", { branch, studio_closed: studioClosed }),
+  create: (branch: string, studioClosed: boolean, startPoint?: string, carryChanges = false) =>
+    gitPost<GitStatus & { carried_changes: boolean; stashed_changes: boolean }>("/create", {
+      branch,
+      studio_closed: studioClosed,
+      start_point: startPoint,
+      carry_changes: carryChanges,
+    }),
+  command: (command: string, studioClosed: boolean) =>
+    gitPost<GitStatus & { ok: boolean; command: string; output: string; exit_code: number }>(
+      "/command",
+      { command, studio_closed: studioClosed },
+    ),
   commit: (message: string, studioClosed: boolean) =>
     gitPost<GitStatus>("/commit", { message, studio_closed: studioClosed }),
+  commitStaged: (message: string, studioClosed: boolean) =>
+    gitPost<GitStatus>("/commit-staged", { message, studio_closed: studioClosed }),
   stashPush: (message: string, includeUntracked: boolean, studioClosed: boolean) =>
     gitPost<GitStatus & { output: string }>("/stash", {
       message: message || undefined,
@@ -332,6 +379,30 @@ export const git = {
   stashApply: (reference: string, drop: boolean, studioClosed: boolean) =>
     gitPost<GitStatus>("/stash/apply", { reference, drop, studio_closed: studioClosed }),
   stashDrop: (reference: string) => gitPost<{ dropped: string }>("/stash/drop", { reference }),
+  log: (max = 200) => gitRequest<{ commits: GitCommit[] }>(`/log?max=${max}`),
+  fileStatus: () => gitRequest<{ files: GitFileStatus[] }>("/file-status"),
+  stage: (path: string) => gitPost<{ ok: boolean }>("/stage", { path }),
+  unstage: (path: string) => gitPost<{ ok: boolean }>("/unstage", { path }),
+  discard: (path: string) => gitPost<{ ok: boolean }>("/discard", { path }),
+  push: () => gitPost<{ ok: boolean; output: string }>("/push", {}),
+  addRemote: (name: string, url: string) =>
+    gitPost<{ ok: boolean; name: string; url: string }>("/remote", { name, url }),
+  pull: (studioClosed: boolean) => gitPost<GitStatus & { ok: boolean; output: string }>("/pull", { studio_closed: studioClosed }),
+  cherryPick: (sha: string, studioClosed: boolean) =>
+    gitPost<GitStatus & { ok: boolean }>("/cherry-pick", { sha, studio_closed: studioClosed }),
+  revert: (sha: string, studioClosed: boolean) =>
+    gitPost<GitStatus & { ok: boolean }>("/revert", { sha, studio_closed: studioClosed }),
+  reset: (sha: string, mode: "soft" | "mixed" | "hard", studioClosed: boolean) =>
+    gitPost<GitStatus & { ok: boolean }>("/reset", { sha, mode, studio_closed: studioClosed }),
+  createTag: (name: string, sha?: string, message?: string) =>
+    gitPost<{ ok: boolean }>("/tag", { name, sha, message }),
+  deleteTag: (name: string) => gitPost<{ ok: boolean }>("/delete-tag", { name }),
+  deleteBranch: (name: string, force = false) =>
+    gitPost<{ ok: boolean }>("/delete-branch", { name, force }),
+  merge: (branch: string, studioClosed: boolean) =>
+    gitPost<GitStatus>("/merge", { branch, studio_closed: studioClosed }),
+  rebase: (branch: string, studioClosed: boolean) =>
+    gitPost<GitStatus>("/rebase", { branch, studio_closed: studioClosed }),
 };
 
 // ---- offline fixture -------------------------------------------------------

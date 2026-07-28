@@ -3,8 +3,10 @@
 require "json"
 require "net/http"
 require "open3"
+require "socket"
 require "tempfile"
 require "time"
+require "timeout"
 require "webrick"
 
 module MendixBridge
@@ -43,6 +45,7 @@ module MendixBridge
       @run_cmd_override = run_cmd
       @xas_log = []
       @xas_mutex = Mutex.new
+      @database_mutex = Mutex.new
       @xas_proxy_enabled = false
       @xas_target_port = nil
       validate!
@@ -335,13 +338,49 @@ module MendixBridge
 
       result =
         case [request.request_method, action]
-        when ["GET", "status"] then workflow.status
-        when ["GET", "branches"] then { "branches" => workflow.branches, "current" => workflow.status["branch"] }
-        when ["GET", "stash"] then { "stash" => workflow.stash_list.lines.map(&:strip).reject(&:empty?) }
-        when ["POST", "fetch"] then workflow.fetch && workflow.status
-        when ["POST", "switch"] then workflow.switch(payload.fetch("branch"), studio_closed: closed)
-        when ["POST", "create"] then workflow.create(payload.fetch("branch"), studio_closed: closed)
-        when ["POST", "commit"] then workflow.commit(payload.fetch("message"), studio_closed: closed)
+        when ["GET",  "status"]       then workflow.status
+        when ["GET",  "branches"]
+          {
+            "branches" => workflow.branches,
+            "current" => workflow.status["branch"],
+            "remotes" => workflow.remote_names
+          }
+        when ["GET",  "tags"]         then { "tags" => workflow.tags }
+        when ["GET",  "worktrees"]    then { "worktrees" => workflow.worktrees, "root" => workflow.root }
+        when ["GET",  "stash"]        then { "stash" => workflow.stash_list.lines.map(&:strip).reject(&:empty?) }
+        when ["GET",  "log"]
+          max = [[(request.query["max"] || "200").to_i, 1].max, 500].min
+          { "commits" => workflow.log(max:) }
+        when ["GET",  "file-status"]  then { "files" => workflow.file_status }
+        when ["POST", "fetch"]        then workflow.fetch && workflow.status
+        when ["POST", "switch"]       then workflow.switch(payload.fetch("branch"), studio_closed: closed)
+        when ["POST", "create"]
+          workflow.create(
+            payload.fetch("branch"),
+            studio_closed: closed,
+            start_point: payload["start_point"],
+            carry_changes: payload["carry_changes"] == true
+          )
+        when ["POST", "command"]
+          workflow.terminal_command(payload.fetch("command"), studio_closed: closed)
+        when ["POST", "commit"]       then workflow.commit(payload.fetch("message"), studio_closed: closed)
+        when ["POST", "commit-staged"] then workflow.commit_staged(payload.fetch("message"), studio_closed: closed)
+        when ["POST", "stage"]        then workflow.stage(payload.fetch("path"))
+        when ["POST", "unstage"]      then workflow.unstage(payload.fetch("path"))
+        when ["POST", "discard"]      then workflow.discard(payload.fetch("path"))
+        when ["POST", "push"]         then workflow.push
+        when ["POST", "remote"]       then workflow.add_remote(payload.fetch("name"), payload.fetch("url"))
+        when ["POST", "pull"]         then workflow.pull(studio_closed: closed)
+        when ["POST", "cherry-pick"]  then workflow.cherry_pick(payload.fetch("sha"), studio_closed: closed)
+        when ["POST", "revert"]       then workflow.revert_commit(payload.fetch("sha"), studio_closed: closed)
+        when ["POST", "reset"]        then workflow.reset_to(payload.fetch("sha"), mode: payload.fetch("mode", "mixed"), studio_closed: closed)
+        when ["POST", "tag"]
+          workflow.create_tag(payload.fetch("name"), sha: payload["sha"], message: payload["message"])
+        when ["POST", "delete-tag"]    then workflow.delete_tag(payload.fetch("name"))
+        when ["POST", "delete-branch"]
+          workflow.delete_branch(payload.fetch("name"), force: payload["force"] == true)
+        when ["POST", "merge"]        then workflow.merge(payload.fetch("branch"), studio_closed: closed)
+        when ["POST", "rebase"]       then workflow.rebase(payload.fetch("branch"), studio_closed: closed)
         when ["POST", "stash"]
           workflow.stash_push(
             studio_closed: closed,
@@ -470,7 +509,7 @@ module MendixBridge
       persist_page_draft(qn, content, mdl, ok, message)
       json(
         response,
-        { ok:, mdl:, message: ok ? "Page MDL validated and draft saved." : message },
+        { ok:, mdl:, message: ok ? "Page changes validated and saved." : message },
         status: ok ? 200 : 422
       )
     rescue KeyError => error
@@ -497,7 +536,7 @@ module MendixBridge
       persist_draft("flow-plans.json", qn, "body" => body, "mdl" => mdl, "valid" => ok, "message" => message)
       json(
         response,
-        { ok:, mdl:, message: ok ? "Flow MDL validated and draft saved." : message },
+        { ok:, mdl:, message: ok ? "Flow changes validated and saved." : message },
         status: ok ? 200 : 422
       )
     rescue KeyError => error
@@ -769,6 +808,14 @@ module MendixBridge
               status: 422
             )
           end
+          startup_error = ensure_local_database_available(project)
+          if startup_error
+            return json(
+              response,
+              { ok: false, message: startup_error },
+              status: 503
+            )
+          end
           [@mxcli, "sql", "-p", project, "--json", "--dsn", dsn, query]
         end
 
@@ -811,6 +858,78 @@ module MendixBridge
 
       require "cgi"
       "postgres://#{CGI.escape(user)}:#{CGI.escape(pass)}@#{host}:#{port}/#{name}?sslmode=disable"
+    end
+
+    # SQL does not require the Mendix runtime. For a project-local database,
+    # start only its PostgreSQL Compose service on demand and keep it running
+    # between queries. External databases are contacted directly.
+    def ensure_local_database_available(project)
+      env_path = docker_env_path
+      return "No database connection configured." unless env_path
+
+      env = parse_env_file(env_path)
+      return nil if env["DB_MODE"].to_s == "external"
+
+      port = env.fetch("DB_PORT", "5432").to_i
+      return "Invalid local database port." unless port.positive?
+      docker_dir = File.dirname(env_path)
+      compose_path = File.join(docker_dir, "docker-compose.yml")
+      return "Local database definition is missing: #{compose_path}" unless File.file?(compose_path)
+      return nil if postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+
+      @database_mutex.synchronize do
+        return nil if postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+
+        output, error, status = Open3.capture3(
+          "docker", "compose",
+          "--env-file", env_path,
+          "-f", compose_path,
+          "up", "-d", "db",
+          chdir: docker_dir
+        )
+        unless status.success?
+          detail = clean_mxcli_error(error.empty? ? output : error)
+          return "Could not start the local PostgreSQL service: #{detail}"
+        end
+
+        begin
+          Timeout.timeout(30) do
+            sleep 0.25 until postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+          end
+        rescue Timeout::Error
+          return "PostgreSQL was started but did not become ready on localhost:#{port} within 30 seconds."
+        end
+      end
+      nil
+    rescue Errno::ENOENT
+      "Docker is required to start the project-local PostgreSQL service."
+    rescue StandardError => error
+      "Could not prepare the local database: #{error.message}"
+    end
+
+    def tcp_reachable?(host, port)
+      Socket.tcp(host, port, connect_timeout: 0.25) { |socket| socket.close }
+      true
+    rescue SystemCallError, IOError
+      false
+    end
+
+    def postgres_compose_ready?(docker_dir, env_path, compose_path, env)
+      return false unless tcp_reachable?("127.0.0.1", env.fetch("DB_PORT", "5432").to_i)
+
+      _output, _error, status = Open3.capture3(
+        "docker", "compose",
+        "--env-file", env_path,
+        "-f", compose_path,
+        "exec", "-T", "db",
+        "pg_isready",
+        "-U", env.fetch("DB_USER", "mendix"),
+        "-d", env.fetch("DB_NAME", "mendix"),
+        chdir: docker_dir
+      )
+      status.success?
+    rescue Errno::ENOENT
+      false
     end
 
     def parse_query_rows(stdout)
@@ -990,7 +1109,7 @@ module MendixBridge
       )
       json(
         response,
-        { ok:, mdl:, message: ok ? "ALTER PAGE validated and draft saved." : message },
+        { ok:, mdl:, message: ok ? "Page changes validated and saved." : message },
         status: ok ? 200 : 422
       )
     rescue KeyError => e

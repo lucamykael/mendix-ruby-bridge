@@ -139,6 +139,34 @@ class BackendServerTest < Minitest::Test
     assert_includes Net::HTTP.get(uri("/")), "viewer"
   end
 
+  def test_offline_sql_accepts_a_reachable_project_local_database_without_the_app
+    docker_dir = File.join(@root, ".docker")
+    FileUtils.mkdir_p(docker_dir)
+    database = TCPServer.new("127.0.0.1", 0)
+    port = database.addr[1]
+    File.write(
+      File.join(docker_dir, ".env"),
+      "DB_MODE=local\nDB_PORT=#{port}\nDB_NAME=mendix\nDB_USER=mendix\nDB_PASSWORD=mendix\n"
+    )
+    File.write(File.join(docker_dir, "docker-compose.yml"), "services:\n  db:\n    image: postgres\n")
+    @server.define_singleton_method(:postgres_compose_ready?) { |*| true }
+
+    assert_nil @server.send(:ensure_local_database_available, @mpr)
+  ensure
+    database&.close
+  end
+
+  def test_offline_sql_uses_an_external_database_directly
+    docker_dir = File.join(@root, ".docker")
+    FileUtils.mkdir_p(docker_dir)
+    File.write(
+      File.join(docker_dir, ".env"),
+      "DB_MODE=external\nEXT_DB_HOST=db.example.test\nEXT_DB_PORT=5432\nDB_NAME=mendix\nDB_USER=mendix\nDB_PASSWORD=mendix\n"
+    )
+
+    assert_nil @server.send(:ensure_local_database_available, @mpr)
+  end
+
   def test_persists_layout_for_known_element
     response = post_json(
       "/api/layout",

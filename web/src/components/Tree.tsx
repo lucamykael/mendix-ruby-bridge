@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ElementDetail, TreeNode } from "../model/types";
 
 const ICONS: Record<string, string> = {
+  app: "◆", marketplacemodules: "▦",
   module: "▣", folder: "▸", page: "▤", entity: "▦", association: "⤝",
   microflow: "⚙", nanoflow: "⚡", enumeration: "≔", layout: "◫", snippet: "⌗",
   domainmodel: "◈", security: "🔒", projectsecurity: "🔒", userrole: "○", modulerole: "○",
@@ -9,6 +10,7 @@ const ICONS: Record<string, string> = {
   buildingblock: "▩", pagetemplate: "▤", imagecollection: "◲", constant: "π",
 };
 const icon = (t: string) => ICONS[t] ?? "";
+const DIALOG_TYPES = new Set(["settings", "projectsecurity", "navigation", "styling", "modulesettings", "security"]);
 
 export interface Selection {
   qn: string;
@@ -71,7 +73,7 @@ function TreeItem({
   onOpenDomainModel?: (moduleName: string) => void;
 }) {
   const kids = node.children ?? [];
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(node.type === "app");
   const forceOpen = (p.q || p.pagesOnly) && kids.length > 0;
   const detail = node.qualifiedName ? p.hasDetail(node.qualifiedName) : false;
   const isSel = node.qualifiedName && node.qualifiedName === p.selected;
@@ -91,7 +93,8 @@ function TreeItem({
       onOpenDomainModel(moduleName);
       return;
     }
-    if (detail) p.onSelect({ qn: node.qualifiedName!, type: node.type, label: node.label });
+    if (detail || (node.qualifiedName && DIALOG_TYPES.has(node.type)))
+      p.onSelect({ qn: node.qualifiedName!, type: node.type, label: node.label });
     else if (kids.length) setOpen((o) => !o);
   };
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { activitiesFor } from "../model/flowActivities";
 
 // Studio Pro-style toolbox, contextual to the selected editor:
 // - page/snippet -> widget palette (layout, text, buttons, inputs, data, building blocks)
@@ -6,7 +7,7 @@ import { useMemo, useState } from "react";
 // - entity/domain model -> domain palette
 // Styled after Studio Pro: search on top, collapsible groups, pictogram cards.
 
-type Item = { icon: string; label: string; flowType?: string; flowKind?: string; flowStmt?: string };
+type Item = { icon: string; label: string; flowType?: string; flowKind?: string; flowStmt?: string; writable?: boolean };
 type Group = { title: string; items: Item[] };
 
 // Callable actions discovered from the project inventory (Java/JavaScript
@@ -60,28 +61,21 @@ function actionGroups(context: string | undefined, actions: FlowAction[]): Group
     .map(([mod, items]) => ({ title: mod, items: items.sort((x, y) => x.label.localeCompare(y.label)) }));
 }
 
-const act = (icon: string, label: string, kind = "action"): Item => ({ icon, label, flowType: "activity", flowKind: kind });
-
-const FLOW_GROUPS: Group[] = [
-  { title: "Object activities", items: [
-    act("⬇", "Cast object", "assign"), act("✎", "Change object", "assign"),
-    act("✔", "Commit object(s)"), act("＋", "Create object"),
-    act("🗑", "Delete object(s)"), act("⤵", "Retrieve"), act("↺", "Rollback object"),
-  ] },
-  { title: "List activities", items: [
-    act("Σ", "Aggregate list"), act("⇄", "Change list"),
-    act("＋", "Create list"), act("≣", "List operation"),
-  ] },
-  { title: "Action call activities", items: [
-    act("☕", "Java action call"), act("⚙", "Microflow call"),
-  ] },
-  { title: "Variable activities", items: [
-    act("✎", "Change variable", "assign"), act("＋", "Create variable"),
-  ] },
-  { title: "Client activities", items: [
-    act("▤", "Show page"), act("⚑", "Show message"), act("↧", "Download file"),
-  ] },
-];
+function flowGroups(context: string): Group[] {
+  const grouped = new Map<string, Item[]>();
+  for (const activity of activitiesFor(context)) {
+    const items = grouped.get(activity.group) ?? [];
+    items.push({
+      icon: activity.icon,
+      label: activity.label,
+      flowType: "activity",
+      flowKind: activity.id,
+      writable: activity.writable,
+    });
+    grouped.set(activity.group, items);
+  }
+  return [...grouped].map(([title, items]) => ({ title, items }));
+}
 
 const WIDGET_GROUPS: Group[] = [
   { title: "Data containers", items: [
@@ -120,7 +114,7 @@ function groupsFor(context: string | undefined, tab: string): Group[] {
   switch (context) {
     case "microflow":
     case "nanoflow":
-      return FLOW_GROUPS;
+      return flowGroups(context);
     case "entity":
     case "domainmodel":
       return DOMAIN_GROUPS;
@@ -183,7 +177,7 @@ export default function Toolbox({ context, actions = [] }: { context?: string; a
                   <div
                     className="tb-item"
                     key={it.label}
-                    title={`Drag onto the canvas to add ${it.label}`}
+                    title={`Drag onto the canvas to add ${it.label}${it.writable === false ? " — configuration supported; Model SDK writer pending" : ""}`}
                     draggable
                     onDragStart={(e) => {
                       const isFlow = context === "microflow" || context === "nanoflow";
@@ -200,6 +194,7 @@ export default function Toolbox({ context, actions = [] }: { context?: string; a
                   >
                     <span className="tb-icon">{it.icon}</span>
                     <span className="tb-label">{it.label}</span>
+                    {it.writable === false && <span className="tb-model-badge" title="Requires Model SDK writer">SDK</span>}
                   </div>
                 ))}
               </div>

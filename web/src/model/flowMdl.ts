@@ -38,7 +38,10 @@ function statement(node: Node, ctx: Ctx): string {
   // into nodes) — fall through to the DECLARE placeholder instead.
   const valid = d.stmt && /^[A-Za-z$]/.test(d.stmt.trim());
   if (d.stmt && valid) return d.stmt.endsWith(";") || node.type === "decision" ? d.stmt : `${d.stmt};`;
-  if (node.type === "end") return "return;";
+  if (node.type === "end")   return "return;";
+  if (node.type === "merge") return "// merge;";
+  if (node.type === "loop")  return `// loop ${d.label ?? "items"};`;
+  if (node.type === "parameter") return "// parameter (reference only);";
   // Placeholder for blocks added on the canvas that have no MDL yet.
   const name = `$NewValue${++ctx.synth}`;
   return `DECLARE ${name} String = '${(d.label ?? "TODO").replace(/'/g, "''")}';`;

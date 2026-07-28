@@ -8,8 +8,8 @@ export default function ERTable({ data }: NodeProps) {
   const d = data as ErTableData;
   return (
     <div className="er-table">
-      {/* single incoming anchor on the left, vertically centred */}
-      <Handle type="target" position={Position.Left} className="er-handle" />
+      <Handle type="target" position={Position.Left} id="target-left" className="er-handle er-handle-left" />
+      <Handle type="target" position={Position.Right} id="target-right" className="er-handle er-handle-right" />
 
       <div className="er-th">
         <span className="er-name">{d.name}</span>
@@ -37,9 +37,15 @@ export default function ERTable({ data }: NodeProps) {
             <span className="er-type">{ref.many ? "* ref" : "ref"}</span>
             <Handle
               type="source"
+              position={Position.Left}
+              id={`ref-${ref.qn}-left`}
+              className="er-handle er-handle-left"
+            />
+            <Handle
+              type="source"
               position={Position.Right}
-              id={`ref-${ref.qn}`}
-              className="er-handle"
+              id={`ref-${ref.qn}-right`}
+              className="er-handle er-handle-right"
             />
           </div>
         ))}
