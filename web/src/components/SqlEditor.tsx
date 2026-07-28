@@ -76,6 +76,7 @@ export default function SqlEditor({ insertSql, catalog = [] }: { insertSql?: str
   const [busy, setBusy] = useState(false);
   const [connection, setConnection] = useState<"unknown" | "connected" | "disconnected">("unknown");
   const [editorScroll, setEditorScroll] = useState({ top: 0, left: 0 });
+  const [editorFocused, setEditorFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastInsertedSql = useRef<string | undefined>(undefined);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -234,11 +235,13 @@ export default function SqlEditor({ insertSql, catalog = [] }: { insertSql?: str
         <div className="db-line-numbers">
           {active.sql.split("\n").map((_, index) => <span key={index}>{index + 1}</span>)}
         </div>
-        <div className="db-code-editor">
+        <div className={`db-code-editor${editorFocused ? " focused" : ""}`}>
           <pre aria-hidden style={{ transform: `translate(${-editorScroll.left}px, ${-editorScroll.top}px)` }}>
             <code>{highlightSql(active.sql)}{"\n"}</code>
           </pre>
           <textarea ref={textareaRef} value={active.sql} spellCheck={false} aria-label="SQL script"
+          onFocus={() => setEditorFocused(true)}
+          onBlur={() => setEditorFocused(false)}
           onChange={(event) => {
             const sql = event.target.value;
             const caret = event.target.selectionStart;
