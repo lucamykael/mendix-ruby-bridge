@@ -830,6 +830,8 @@ nav.tabs button.on { background: var(--sel); color: var(--fg); }
 .db-code-editor textarea { width: 100%; height: 100%; resize: none; outline: 0; overflow: auto;
   overflow-wrap: normal; background: transparent; color: transparent;
   -webkit-text-fill-color: transparent; caret-color: #fff; }
+.db-code-editor.focused pre { visibility: hidden; }
+.db-code-editor.focused textarea { color: #d7dae0; -webkit-text-fill-color: #d7dae0; }
 .db-code-editor textarea::selection { background: rgba(61,112,179,.55); }
 .db-code-editor .sql-keyword { color: #569cd6; font-weight: 400; }
 .db-code-editor .sql-string { color: #ce9178; }

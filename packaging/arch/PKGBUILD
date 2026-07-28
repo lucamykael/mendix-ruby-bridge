@@ -1,6 +1,6 @@
 # Maintainer: Mykael <myklpm@gmail.com>
 pkgname=mendix-ruby-bridge
-pkgver=0.1.4
+pkgver=0.1.5
 pkgrel=1
 pkgdesc="Read, model, validate, and change Mendix projects with Ruby"
 arch=('any')
