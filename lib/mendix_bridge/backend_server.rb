@@ -26,7 +26,8 @@ module MendixBridge
     def initialize(
       inventory_dir:,
       web_root:,
-      mxcli:,
+      mxcli: nil,       # kept for compatibility; ignored when runner: is given
+      runner: MxrbRunner.new,
       bind: "127.0.0.1",
       port: 4567,
       logger: nil,
@@ -34,7 +35,8 @@ module MendixBridge
     )
       @inventory_dir = File.expand_path(inventory_dir)
       @web_root = File.expand_path(web_root)
-      @mxcli = File.expand_path(mxcli)
+      @runner = runner
+      @mxcli = @runner.binary  # legacy alias — some helpers still use @mxcli internally
       @layout_mutex = Mutex.new
       @app_mutex = Mutex.new
       @app_log = []
@@ -75,8 +77,7 @@ module MendixBridge
         File.file?(tree)
       raise BackendServerError, "frontend build does not exist: #{@web_root}" unless
         File.file?(File.join(@web_root, "index.html"))
-      raise BackendServerError, "mxcli is not executable: #{@mxcli}" unless
-        File.executable?(@mxcli)
+      raise BackendServerError, "mxrb is not available" unless @runner.executable?
     end
 
     def mount_routes
@@ -110,6 +111,26 @@ module MendixBridge
       end
       @server.mount_proc("/api/xas") { |request, response| xas_control(request, response) }
       @server.mount_proc("/xas") { |request, response| xas_proxy(request, response) }
+
+      # ── mxrb-native routes ──────────────────────────────────────────────────
+      @server.mount_proc("/api/mxrb/tree")   { |req, res| mxrb_tree_route(req, res) }
+      @server.mount_proc("/api/mxrb/find")   { |req, res| mxrb_find_route(req, res) }
+      @server.mount_proc("/api/mxrb/describe") { |req, res| mxrb_describe_route(req, res) }
+      @server.mount_proc("/api/mxrb/impact") { |req, res| mxrb_impact_route(req, res) }
+      @server.mount_proc("/api/mxrb/refs")   { |req, res| mxrb_refs_route(req, res) }
+      @server.mount_proc("/api/mxrb/callers") { |req, res| mxrb_callers_route(req, res) }
+      @server.mount_proc("/api/mxrb/callees") { |req, res| mxrb_callees_route(req, res) }
+      @server.mount_proc("/api/mxrb/rename") { |req, res| mxrb_rename_route(req, res) }
+      @server.mount_proc("/api/mxrb/remove") { |req, res| mxrb_remove_route(req, res) }
+      @server.mount_proc("/api/mxrb/move")   { |req, res| mxrb_move_route(req, res) }
+      @server.mount_proc("/api/mxrb/diff")   { |req, res| mxrb_diff_route(req, res) }
+      @server.mount_proc("/api/mxrb/search") { |req, res| mxrb_search_route(req, res) }
+      @server.mount_proc("/api/mxrb/report") { |req, res| mxrb_report_route(req, res) }
+      @server.mount_proc("/api/mxrb/design/scan") { |req, res| mxrb_design_scan_route(req, res) }
+      @server.mount_proc("/api/mxrb/cache")  { |req, res| mxrb_cache_route(req, res) }
+      @server.mount_proc("/api/mxrb/validate") { |req, res| mxrb_validate_route(req, res) }
+      @server.mount_proc("/api/mxrb/oql")    { |req, res| mxrb_oql_route(req, res) }
+      @server.mount_proc("/api/mxrb/generate") { |req, res| mxrb_generate_route(req, res) }
       @server.mount(
         "/",
         WEBrick::HTTPServlet::FileHandler,
@@ -428,10 +449,15 @@ module MendixBridge
     end
 
     def run_mxcli(*arguments)
-      stdout, stderr, status = Open3.capture3(@mxcli, *arguments)
+      run_mxrb(*arguments)
+    end
+
+    def run_mxrb(*arguments)
+      stdout, stderr, status = @runner.run(*arguments)
       return stdout if status.success?
 
-      message = stderr.lines.reject { |line| line.start_with?("WARNING:") }.join.strip
+      message = stderr.lines.reject { |line| line.start_with?("[mxrb]") || line.start_with?("WARNING:") }.join.strip
+      message = stdout.strip if message.empty?
       raise BackendServerError, message
     end
 
@@ -1751,6 +1777,301 @@ module MendixBridge
       response["content-type"] = "application/json; charset=utf-8"
       response["cache-control"] = "no-store"
       response.body = "#{JSON.generate(payload)}\n"
+    end
+
+    # ── mxrb-native route handlers ─────────────────────────────────────────────
+
+    # GET /api/mxrb/tree?module=<name>
+    def mxrb_tree_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      args = ["tree", project]
+      args << request.query["module"] if request.query["module"].to_s != ""
+      out = run_mxrb(*args)
+      json(response, { ok: true, tree: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/find?q=<text>
+    def mxrb_find_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      q = request.query["q"].to_s
+      return json(response, { error: "q is required" }, status: 400) if q.empty?
+
+      out = run_mxrb("find", project, q)
+      results = out.lines.map do |line|
+        parts = line.strip.split("\t")
+        { name: parts[0], type: parts[1] }
+      end.reject { |r| r[:name].to_s.empty? }
+      json(response, { ok: true, results: })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/describe?name=<qualified_name>
+    def mxrb_describe_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name = request.query["name"].to_s
+      return json(response, { error: "name is required" }, status: 400) if name.empty?
+
+      out = run_mxrb("describe", project, name)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/impact?name=<qualified_name>
+    def mxrb_impact_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name = request.query["name"].to_s
+      return json(response, { error: "name is required" }, status: 400) if name.empty?
+
+      out = run_mxrb("impact", project, name)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/refs?name=<name>
+    def mxrb_refs_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name = request.query["name"].to_s
+      return json(response, { error: "name is required" }, status: 400) if name.empty?
+
+      out = run_mxrb("refs", project, name)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/callers?name=<name>
+    def mxrb_callers_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name = request.query["name"].to_s
+      return json(response, { error: "name is required" }, status: 400) if name.empty?
+
+      out = run_mxrb("callers", project, name)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/callees?name=<name>
+    def mxrb_callees_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name = request.query["name"].to_s
+      return json(response, { error: "name is required" }, status: 400) if name.empty?
+
+      out = run_mxrb("callees", project, name)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # POST /api/mxrb/rename  { name: "Old.Name", to: "New.Name", apply: false }
+    def mxrb_rename_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name  = payload.fetch("name")
+      to    = payload.fetch("to")
+      apply = payload["apply"] == true
+
+      args = ["rename", project, name, to]
+      args << "--apply" if apply
+      out  = run_mxrb(*args)
+      json(response, { ok: true, applied: apply, output: out })
+    rescue KeyError => e
+      json(response, { error: "missing parameter: #{e.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON" }, status: 400)
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # POST /api/mxrb/remove  { name: "Module.Element", apply: false }
+    def mxrb_remove_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name  = payload.fetch("name")
+      apply = payload["apply"] == true
+
+      args = ["remove", project, name]
+      args << "--apply" if apply
+      out  = run_mxrb(*args)
+      json(response, { ok: true, applied: apply, output: out })
+    rescue KeyError => e
+      json(response, { error: "missing parameter: #{e.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON" }, status: 400)
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # POST /api/mxrb/move  { name: "Module.Element", container: "Module.Folder", apply: false }
+    def mxrb_move_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      name      = payload.fetch("name")
+      container = payload.fetch("container")
+      apply     = payload["apply"] == true
+
+      args = ["move", project, name, container]
+      args << "--apply" if apply
+      out  = run_mxrb(*args)
+      json(response, { ok: true, applied: apply, output: out })
+    rescue KeyError => e
+      json(response, { error: "missing parameter: #{e.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON" }, status: 400)
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/diff?left=<path>&right=<path>
+    def mxrb_diff_route(request, response)
+      left  = request.query["left"].to_s
+      right = request.query["right"].to_s
+      return json(response, { error: "left and right are required" }, status: 400) if left.empty? || right.empty?
+
+      out = run_mxrb("diff", left, right)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/search?q=<text>
+    def mxrb_search_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      q     = request.query["q"].to_s
+      limit = request.query["limit"].to_s.then { |l| l.empty? ? "10" : l }
+      return json(response, { error: "q is required" }, status: 400) if q.empty?
+
+      out = run_mxrb("search", q, project, "--limit", limit)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/report
+    def mxrb_report_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      out = run_mxrb("report", project)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    end
+
+    # GET /api/mxrb/design/scan
+    def mxrb_design_scan_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      out = run_mxrb("design", "scan", project, "--json")
+      json(response, { ok: true, data: JSON.parse(out) })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    rescue JSON::ParserError
+      json(response, { error: "mxrb design scan returned invalid JSON" }, status: 502)
+    end
+
+    # GET  /api/mxrb/cache?action=status|warm|clear
+    def mxrb_cache_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      action = request.query["action"] || "status"
+      return json(response, { error: "unknown action" }, status: 400) unless
+        %w[status warm clear].include?(action)
+
+      out = run_mxrb("cache", action, project, "--json")
+      json(response, { ok: true, data: JSON.parse(out) })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    rescue JSON::ParserError
+      json(response, { error: "mxrb cache returned invalid JSON" }, status: 502)
+    end
+
+    # GET /api/mxrb/validate
+    def mxrb_validate_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      out = run_mxrb("validate", project)
+      json(response, { ok: true, output: out })
+    rescue BackendServerError => e
+      json(response, { ok: false, error: e.message }, status: 422)
+    end
+
+    # GET /api/mxrb/oql
+    def mxrb_oql_route(request, response)
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+
+      out = run_mxrb("oql", project, "--json")
+      json(response, { ok: true, data: JSON.parse(out) })
+    rescue BackendServerError => e
+      json(response, { error: e.message }, status: 500)
+    rescue JSON::ParserError
+      json(response, { error: "mxrb oql returned invalid JSON" }, status: 502)
+    end
+
+    # POST /api/mxrb/generate  { dsl: "<ruby dsl string>" }
+    # Applies an mxrb Ruby DSL fragment to the source project.
+    def mxrb_generate_route(request, response)
+      return json(response, { error: "method not allowed" }, status: 405) unless
+        request.request_method == "POST"
+
+      payload = JSON.parse(request.body.to_s)
+      dsl     = payload.fetch("dsl").to_s
+      project = source_project
+      return json(response, { error: "source project unavailable" }, status: 503) unless project
+      return json(response, { error: "dsl is required" }, status: 400) if dsl.empty?
+
+      Tempfile.create(["mxrb-generate-", ".rb"]) do |f|
+        f.write(dsl)
+        f.flush
+        out = run_mxrb("generate", f.path, project)
+        json(response, { ok: true, output: out })
+      end
+    rescue KeyError => e
+      json(response, { error: "missing parameter: #{e.key}" }, status: 400)
+    rescue JSON::ParserError
+      json(response, { error: "invalid JSON" }, status: 400)
+    rescue BackendServerError => e
+      json(response, { ok: false, error: e.message }, status: 422)
     end
   end
 end

@@ -15,14 +15,17 @@ module MendixBridge
       rebase-merge rebase-apply BISECT_LOG
     ].freeze
 
-    def initialize(project_file, inventory_dir: nil, mxcli: nil, mx: nil)
+    def initialize(project_file, inventory_dir: nil, mxcli: nil, mx: nil,
+                   runner: MxrbRunner.new)
       @project_file = File.expand_path(project_file)
       @project_dir = File.dirname(@project_file)
       @inventory_dir = inventory_dir && File.expand_path(inventory_dir)
       @root = git!("rev-parse", "--show-toplevel").strip
       @git_dir = git!("rev-parse", "--absolute-git-dir").strip
+      @runner = runner
+      # Legacy args kept for backward compatibility but not used
       @mxcli = mxcli
-      @mx = mx || resolve_mx
+      @mx = mx
       verify_project_tracking!
     end
 
@@ -518,15 +521,13 @@ module MendixBridge
       raise GitWorkflowError, "project file is absent on branch #{current_branch}" unless File.file?(@project_file)
       verify_project_tracking!
 
-      output, error, status = Open3.capture3(@mx, "check", @project_file, chdir: @project_dir)
+      _output, error, status = @runner.run("validate", @project_file)
       unless status.success?
-        raise GitWorkflowError, "Mendix consistency check failed:\n#{error}#{output}"
+        raise GitWorkflowError, "mxrb structural validation failed:\n#{error}"
       end
     end
 
     def refresh_inventory!
-      raise GitWorkflowError, "mxcli is required to refresh the inventory" unless @mxcli
-
       metadata_file = File.join(@inventory_dir, "mendix-project.json")
       raise GitWorkflowError, "not an imported inventory: #{@inventory_dir}" unless File.file?(metadata_file)
 
@@ -535,10 +536,10 @@ module MendixBridge
         raise GitWorkflowError, "inventory belongs to a different Mendix project"
       end
 
-      _inventory, warnings = Importer.new(mxcli: @mxcli).import(@project_file, @inventory_dir)
+      _tree, warnings = MxrbImporter.new(runner: @runner).import(@project_file, @inventory_dir)
       return if warnings.empty?
 
-      raise GitWorkflowError, "inventory refresh had #{warnings.length} description errors"
+      raise GitWorkflowError, "inventory refresh had #{warnings.length} warnings"
     end
 
     def rollback(previous)
@@ -555,17 +556,6 @@ module MendixBridge
       return unless operation_in_progress
 
       raise GitWorkflowError, "Git operation in progress: #{operation_in_progress}"
-    end
-
-    def resolve_mx
-      version_file = File.join(@project_dir, ".mendix-version")
-      raise GitWorkflowError, "missing #{version_file}" unless File.file?(version_file)
-
-      version = File.read(version_file).strip
-      executable = File.join(Dir.home, ".mxcli", "mxbuild", version, "modeler", "mx")
-      raise GitWorkflowError, "Mendix mx #{version} is not installed: #{executable}" unless File.executable?(executable)
-
-      executable
     end
 
     def verify_project_tracking!

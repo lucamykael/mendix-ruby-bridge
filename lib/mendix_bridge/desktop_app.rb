@@ -70,13 +70,12 @@ module MendixBridge
 
     def start_backend(port)
       web_root = File.join(@bridge_dir, "web", "dist")
-      mxcli    = File.join(@bridge_dir, "bin", "mxcli")
 
       @server_thread = Thread.new do
         @backend = BackendServer.new(
           inventory_dir: @inventory_dir,
           web_root: web_root,
-          mxcli: mxcli,
+          runner: MxrbRunner.new,
           bind: "127.0.0.1",
           port: port
         )

@@ -13,8 +13,8 @@ module MendixBridge
   class MigrationExecutor
     Result = Data.define(:backup_dir, :operations)
 
-    def initialize(mxcli:)
-      @mxcli = File.expand_path(mxcli)
+    def initialize(runner: MxrbRunner.new)
+      @runner = runner
     end
 
     def apply(plan, project_file:, confirmation:, studio_closed:)
@@ -67,8 +67,7 @@ module MendixBridge
     def validate!(plan, project_file, confirmation, studio_closed)
       raise MigrationError, "Mendix project does not exist: #{project_file}" unless
         File.file?(project_file)
-      raise MigrationError, "mxcli is not executable: #{@mxcli}" unless
-        File.executable?(@mxcli)
+      raise MigrationError, "mxrb is not available" unless @runner.executable?
       raise MigrationError, "--studio-closed is required" unless studio_closed
       unless confirmation == plan.name
         raise MigrationError, "confirmation must exactly match migration name #{plan.name}"
@@ -91,26 +90,25 @@ module MendixBridge
       Migration::Generator.rename_operations(plan).each do |operation|
         options = operation.options.fetch("to")
         run!(
-          @mxcli,
+          @runner.binary,
           "rename",
-          "-p", project_file,
-          operation.type,
+          project_file,
           operation.name,
           options,
-          "--dry-run",
           error_prefix: "rename preview failed for #{operation.name}"
         )
       end
 
-      mdl = Migration::Generator.mdl(plan)
-      return if mdl.empty?
+      dsl = Migration::Generator.mxrb_dsl(plan)
+      return if dsl.nil? || dsl.empty?
 
-      with_mdl(mdl) do |path|
+      with_dsl(dsl, project_file) do |dsl_path, out_path|
         run!(
-          @mxcli,
-          "check", path,
-          error_prefix: "migration MDL is invalid"
+          @runner.binary,
+          "generate", dsl_path, out_path,
+          error_prefix: "migration DSL is invalid"
         )
+        FileUtils.rm_f(out_path)
       end
     end
 
@@ -146,45 +144,35 @@ module MendixBridge
     def apply_renames!(plan, project_file)
       Migration::Generator.rename_operations(plan).each do |operation|
         run!(
-          @mxcli,
+          @runner.binary,
           "rename",
-          "-p", project_file,
-          operation.type,
+          project_file,
           operation.name,
           operation.options.fetch("to"),
+          "--apply",
           error_prefix: "could not rename #{operation.name}"
         )
       end
     end
 
     def apply_mdl!(plan, project_file)
-      mdl = Migration::Generator.mdl(plan)
-      return if mdl.empty?
+      dsl = Migration::Generator.mxrb_dsl(plan)
+      return if dsl.nil? || dsl.empty?
 
-      with_mdl(mdl) do |path|
+      with_dsl(dsl, project_file) do |dsl_path, _out_path|
         run!(
-          @mxcli,
-          "exec", path,
-          "-p", project_file,
-          error_prefix: "could not apply migration MDL"
+          @runner.binary,
+          "generate", dsl_path, project_file,
+          error_prefix: "could not apply migration"
         )
       end
     end
 
     def check_project!(project_file)
-      version_file = File.join(File.dirname(project_file), ".mendix-version")
-      raise MigrationError, "missing #{version_file}" unless File.file?(version_file)
-
-      version = File.read(version_file).strip
-      mx = File.join(Dir.home, ".mxcli", "mxbuild", version, "modeler", "mx")
-      raise MigrationError, "Mendix mx #{version} is not installed" unless File.executable?(mx)
-
       run!(
-        mx,
-        "check",
-        project_file,
-        chdir: File.dirname(project_file),
-        error_prefix: "official Mendix consistency check failed"
+        @runner.binary,
+        "validate", project_file,
+        error_prefix: "mxrb structural validation failed"
       )
     end
 
@@ -210,11 +198,20 @@ module MendixBridge
       name.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-|-\z/, "")
     end
 
-    def with_mdl(mdl)
-      Tempfile.create(["mendix-ruby-migration-", ".mdl"]) do |file|
-        file.write(mdl)
-        file.flush
-        yield file.path
+    # Writes DSL to a temp file and yields [dsl_path, tmp_output_mpr_path] to
+    # the block. The caller decides whether to apply to the real project.mpr or
+    # a temp copy (for dry-run / validation).
+    def with_dsl(dsl, project_file)
+      Tempfile.create(["mendix-ruby-migration-", ".rb"]) do |dsl_file|
+        dsl_file.write(dsl)
+        dsl_file.flush
+        tmp_out = "#{project_file}.mxrb-tmp-#{SecureRandom.hex(4)}.mpr"
+        FileUtils.cp(project_file, tmp_out)
+        begin
+          yield dsl_file.path, tmp_out
+        ensure
+          FileUtils.rm_f(tmp_out)
+        end
       end
     end
 
